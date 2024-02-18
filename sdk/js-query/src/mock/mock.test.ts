@@ -27,11 +27,6 @@ import {
 
 jest.setTimeout(60000);
 
-// @ts-ignore
-BigInt.prototype.toJSON = function () {
-  return this.toString();
-};
-
 const SOLANA_NODE_URL = "http://localhost:8899";
 const POLYGON_NODE_URL = "https://polygon-mumbai-bor.publicnode.com";
 const ARBITRUM_NODE_URL = "https://arbitrum-goerli.publicnode.com";
