@@ -252,7 +252,7 @@ func (gov *ChainGovernor) initConfig() error {
 
 	if !gov.flowCancelEnabled { // If flow cancel is disabled, then use an empty set of tokens. Easier to put here than have 5 checks in the various sections of code that use it.
 		flowCancelTokens = []tokenConfigEntry{}
-
+	}
 	for _, ct := range configTokens {
 		addr, err := vaa.StringToAddress(ct.addr)
 		if err != nil {
