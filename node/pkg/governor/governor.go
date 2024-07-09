@@ -244,13 +244,14 @@ func (gov *ChainGovernor) initConfig() error {
 	flowCancelTokens := FlowCancelTokenList()
 	configChains := chainList()
 
-	if !gov.flowCancelEnabled { // If flow cancel is disabled, then use an empty set of tokens. Easier to put here than have 5 checks in the various sections of code that use it.
-		flowCancelTokens = []tokenConfigEntry{}
-	} else if gov.env == common.UnsafeDevNet {
+	if gov.env == common.UnsafeDevNet {
 		configTokens, flowCancelTokens, configChains = gov.initDevnetConfig()
 	} else if gov.env == common.TestNet {
 		configTokens, flowCancelTokens, configChains = gov.initTestnetConfig()
 	}
+
+	if !gov.flowCancelEnabled { // If flow cancel is disabled, then use an empty set of tokens. Easier to put here than have 5 checks in the various sections of code that use it.
+		flowCancelTokens = []tokenConfigEntry{}
 
 	for _, ct := range configTokens {
 		addr, err := vaa.StringToAddress(ct.addr)
