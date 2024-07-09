@@ -18,9 +18,9 @@ func GetDevnetIndex() (int, error) {
 
 	h := strings.Split(hostname, "-")
 
-	// if h[0] != "guardian" {
-	// 	return 0, fmt.Errorf("hostname %s does not appear to be a devnet host", hostname)
-	// }
+	if h[0] != "guardian" {
+		return 0, fmt.Errorf("hostname %s does not appear to be a devnet host", hostname)
+	}
 
 	i, err := strconv.Atoi(h[1])
 	if err != nil {
