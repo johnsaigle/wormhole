@@ -1,0 +1,198 @@
+{
+	"capabilityInfo": [
+		{
+			"packageName": "main",
+			"capability": "CAPABILITY_NETWORK",
+			"depPath": "test/test.main net/http.Post",
+			"path": [
+				{
+					"name": "test/test.main",
+					"package": "test/test"
+				},
+				{
+					"name": "net/http.Post",
+					"site": {
+						"filename": "main.go",
+						"line": "24",
+						"column": "26"
+					},
+					"package": "net/http"
+				}
+			],
+			"packageDir": "test/test",
+			"capabilityType": "CAPABILITY_TYPE_DIRECT"
+		},
+		{
+			"packageName": "main",
+			"capability": "CAPABILITY_READ_SYSTEM_STATE",
+			"depPath": "test/test.main os.Environ",
+			"path": [
+				{
+					"name": "test/test.main",
+					"package": "test/test"
+				},
+				{
+					"name": "os.Environ",
+					"site": {
+						"filename": "main.go",
+						"line": "20",
+						"column": "40"
+					},
+					"package": "os"
+				}
+			],
+			"packageDir": "test/test",
+			"capabilityType": "CAPABILITY_TYPE_DIRECT"
+		},
+		{
+			"packageName": "main",
+			"capability": "CAPABILITY_MODIFY_SYSTEM_STATE",
+			"depPath": "test/test.main os.Setenv",
+			"path": [
+				{
+					"name": "test/test.main",
+					"package": "test/test"
+				},
+				{
+					"name": "os.Setenv",
+					"site": {
+						"filename": "main.go",
+						"line": "19",
+						"column": "14"
+					},
+					"package": "os"
+				}
+			],
+			"packageDir": "test/test",
+			"capabilityType": "CAPABILITY_TYPE_DIRECT"
+		},
+		{
+			"packageName": "main",
+			"capability": "CAPABILITY_UNANALYZED",
+			"depPath": "test/test.main io.ReadAll",
+			"path": [
+				{
+					"name": "test/test.main",
+					"package": "test/test"
+				},
+				{
+					"name": "io.ReadAll",
+					"site": {
+						"filename": "main.go",
+						"line": "29",
+						"column": "28"
+					},
+					"package": "io"
+				}
+			],
+			"packageDir": "test/test",
+			"capabilityType": "CAPABILITY_TYPE_DIRECT"
+		},
+		{
+			"packageName": "main",
+			"capability": "CAPABILITY_REFLECT",
+			"depPath": "test/test.init encoding/json.init reflect.TypeFor[encoding.TextMarshaler]",
+			"path": [
+				{
+					"name": "test/test.init",
+					"package": "test/test"
+				},
+				{
+					"name": "encoding/json.init",
+					"package": "encoding/json"
+				},
+				{
+					"name": "reflect.TypeFor[encoding.TextMarshaler]",
+					"site": {
+						"filename": "encode.go",
+						"line": "373",
+						"column": "61"
+					},
+					"package": "reflect"
+				}
+			],
+			"packageDir": "test/test",
+			"capabilityType": "CAPABILITY_TYPE_DIRECT"
+		},
+		{
+			"packageName": "main",
+			"capability": "CAPABILITY_REFLECT",
+			"depPath": "test/test.main encoding/json.Marshal (*encoding/json.encodeState).marshal (*encoding/json.encodeState).reflectValue (encoding/json.floatEncoder).encode$bound (encoding/json.floatEncoder).encode",
+			"path": [
+				{
+					"name": "test/test.main",
+					"package": "test/test"
+				},
+				{
+					"name": "encoding/json.Marshal",
+					"site": {
+						"filename": "main.go",
+						"line": "20",
+						"column": "29"
+					},
+					"package": "encoding/json"
+				},
+				{
+					"name": "(*encoding/json.encodeState).marshal",
+					"site": {
+						"filename": "encode.go",
+						"line": "163",
+						"column": "18"
+					},
+					"package": "encoding/json"
+				},
+				{
+					"name": "(*encoding/json.encodeState).reflectValue",
+					"site": {
+						"filename": "encode.go",
+						"line": "297",
+						"column": "16"
+					},
+					"package": "encoding/json"
+				},
+				{
+					"name": "(encoding/json.floatEncoder).encode$bound",
+					"site": {
+						"filename": "encode.go",
+						"line": "321",
+						"column": "17"
+					},
+					"package": "encoding/json"
+				},
+				{
+					"name": "(encoding/json.floatEncoder).encode",
+					"package": "encoding/json"
+				}
+			],
+			"packageDir": "test/test",
+			"capabilityType": "CAPABILITY_TYPE_DIRECT"
+		},
+		{
+			"packageName": "main",
+			"capability": "CAPABILITY_EXEC",
+			"depPath": "test/test.main os/exec.Command",
+			"path": [
+				{
+					"name": "test/test.main",
+					"package": "test/test"
+				},
+				{
+					"name": "os/exec.Command",
+					"site": {
+						"filename": "main.go",
+						"line": "34",
+						"column": "19"
+					},
+					"package": "os/exec"
+				}
+			],
+			"packageDir": "test/test",
+			"capabilityType": "CAPABILITY_TYPE_DIRECT"
+		}
+	],
+	"packageInfo": [
+		{
+			"path": "test/test"
+		}
+	]
+}
