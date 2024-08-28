@@ -7,6 +7,7 @@ import (
 	"github.com/certusone/wormhole/node/cmd/ccq"
 	"github.com/certusone/wormhole/node/cmd/debug"
 	"github.com/certusone/wormhole/node/cmd/spy"
+	"github.com/certusone/wormhole/node/cmd/transfer-verifier"
 	"github.com/certusone/wormhole/node/pkg/version"
 
 	"github.com/spf13/cobra"
@@ -15,6 +16,7 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/certusone/wormhole/node/cmd/guardiand"
+
 )
 
 var cfgFile string
@@ -49,6 +51,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.guardiand.yaml)")
 	rootCmd.AddCommand(guardiand.NodeCmd)
 	rootCmd.AddCommand(spy.SpyCmd)
+	rootCmd.AddCommand(transferverifier.TransferVerifierCmd)
 	rootCmd.AddCommand(ccq.QueryServerCmd)
 	rootCmd.AddCommand(guardiand.KeygenCmd)
 	rootCmd.AddCommand(guardiand.AdminCmd)
