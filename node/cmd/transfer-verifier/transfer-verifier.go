@@ -19,7 +19,6 @@ import (
 	"github.com/certusone/wormhole/node/pkg/watchers/evm/connectors/ethabi"
 )
 
-
 // LogMessagePublished(address indexed sender, uint64 sequence, uint32 nonce, bytes payload, uint8 consistencyLevel);
 const EVENTHASH_WORMHOLE_LOG_MESSAGE_PUBLISHED = "0x6eb224fb001ed210e379b335e35efe88672a8ce935d981a6896b27ffdf52a3b2"
 // Transfer(address,address,uint256)
@@ -27,15 +26,37 @@ const EVENTHASH_ERC20_TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4
 // Deposit(address,uint256)
 const EVENTHASH_WETH_DEPOSIT = "0xe1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2402c5c5cc9109c"
 
-// The expected total number of indexed topics for a WETH Deposit event
-const TOPICS_COUNT_DEPOSIT = 2
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000000000000000000000000000"
+
+
+// Standard ERC20 Transfer constants. Note that `_value` (amount) is not indexed.
+// event Transfer(address indexed _from, address indexed _to, uint256 _value)
+
 // The expected total number of indexed topics for an ERC20 Transfer event
 const TOPICS_COUNT_TRANSFER = 3
+// Which index within the topics slice contains the destination for the ERC20 Transfer transaction
+const DESTINATION_INDEX_TRANSFER = 2
+
+// WETH Deposit constants. Note that `wad` (amount) is not indexed.
+// https://etherscan.io/token/0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2#code
+//     event  Deposit(address indexed dst, uint wad);
 
 // Which index within the topics slice contains the destination for the WETH Deposit transaction
 const DESTINATION_INDEX_DEPOSIT = 1
-// Which index within the topics slice contains the destination for the ERC20 Transfer transaction
-const DESTINATION_INDEX_TRANSFER = 2
+// The expected total number of indexed topics for a WETH Deposit event
+const TOPICS_COUNT_DEPOSIT = 2
+
+
+type TransferType int64
+const (
+	Unknown  TransferType = iota
+	WrapAndTransferETH 
+	WrapAndTransferETHWithPayload
+	TransferTokensWithPayload
+	TransferTokens
+	WrapAndTransferEthWithRelay
+	TransferTokensWithRelay
+)
 
 // CLI args
 var (
@@ -85,6 +106,8 @@ func parseTransferPayload(data []byte) (*TransferDetails, error) {
 	// we are only interested in the amount and the token address
 	// amount is at data[1:1 + 32]
 	// tokenAddress is at data[33:33 + 32]
+
+	// ensure we don't panic due to index out of bounds
 	if len(data) < 65 {
 		return nil, errors.New("Invalid data length")
 	}
@@ -184,7 +207,8 @@ func runTransferVerifier(cmd *cobra.Command, args []string) {
 			if err != nil {
 				// This should never occur when parsing well-formed payloads from the Token Bridge
 				logger.Warn("error when parsing data payload", zap.Error(err))
-			} else if transferDetails != nil {
+			}
+			if transferDetails != nil {
 				// nil check should be redundant after checking err, but this avoids nil pointer deref
 				logger.Debug("expected transfer token", zap.String("tokenAddress", transferDetails.TokenAddress.String()))
 				logger.Debug("expected transfer amount", zap.String("amount", transferDetails.Amount.String()))
@@ -197,7 +221,7 @@ func runTransferVerifier(cmd *cobra.Command, args []string) {
 				continue
 			}
 
-			numProcessed, err := validateReceipt(receipt, tokenBridgeAddr, logger)
+			numProcessed, err := validateReceipt(receipt, tokenBridgeAddr, transferDetails, logger)
 			if numProcessed == 0 {
 				logger.Warn("receipt logs empty for tx", zap.String("txHash", vLog.Raw.TxHash.String()))
 				continue
@@ -219,31 +243,51 @@ func runTransferVerifier(cmd *cobra.Command, args []string) {
 
 
 
-// validateReceipt Parses the receipt for a transaction that emits a LogMessagePublished event. Returns the number of logs parsed from the receipt.
+// validateReceipt Parses the receipt for a transaction that emits a LogMessagePublished event. Based on the other logs
+// in the receipt, determines whether the receipt "looks normal". 
+// "Normal" for EVM means that at some point in the receipt, tokens were sent to the Token Bridge contract. This can happen
+// either via an ERC20 transfer or WETH Deposit where the recipient is the Token Bridge.
+// Note that more complex interactions with the Token Bridge contract, e.g. relays or higher-level swap protocols,
+// the may contain many Transfers or Deposits.
+// Returns the number of logs parsed from the receipt.
 func validateReceipt(
 	receipt *types.Receipt,
 	tokenBridgeAddr common.Address,
+	// The uint256 amount parsed from the payload of LogMessagePublished
+	transferDetails *TransferDetails,
 	logger *zap.Logger) (numProcessed uint8, err error) {
 
-	// Shouldn't be necessary but no harm
+	// Sanity check. Shouldn't be necessary but no harm
 	if receipt.Status != 1 {
 		return 0, fmt.Errorf("non-success transaction status: %d", receipt.Status)
 	}
 
+	// The number of ERC20 Transfer() events that occurred in this receipt
+	transferCount := 0
+	// The number of WETH Deposit() events that occurred in this receipt
+	depositCount := 0
+
+	// Whether a burn occurred: a Transfer() to the zero-address
+	burn := false
+
 	looksNormal := false
+
+	logger.Debug("processing logs for receipt", 
+		zap.Int("logCountForReceipt", len(receipt.Logs)))
+
+	hasValidPayload := transferDetails != nil
+	if !hasValidPayload {
+		logger.Warn("validating receipt with nil transfer details")
+	}
 	for i, l := range receipt.Logs {
 		if l == nil {
-			logger.Debug("Skipping nil log")
+			logger.Warn("receipt log is nil. skipping.", 
+				zap.Int("index", i))
 			continue
 		}
 		logger.Debug("processing receipt log", 
 			zap.Int("index", i), 
-			zap.String("address", l.Address.String()))
-
-		// Skip logs produced by the core contract
-		// if l.Address == coreBridgeAddr {
-		// 	continue
-		// }
+			zap.String("emittedBy", l.Address.String()))
 
 		for i, topic := range l.Topics {
 			logger.Debug("topic info", zap.String("topic", topic.Hex()), zap.Int("index", i))
@@ -253,6 +297,7 @@ func validateReceipt(
 		if l.Topics[0] == common.HexToHash(EVENTHASH_WETH_DEPOSIT) {
 			logger.Debug("deposit occurred: Deposit() topic found", 
 				zap.Int("logIndex", i))
+			depositCount += 1
 
 			if len(l.Topics) != TOPICS_COUNT_DEPOSIT {
 				logger.Warn("event Deposit() detected but has wrong number of topics", 
@@ -269,7 +314,7 @@ func validateReceipt(
 			// The topic is prepended with 0s so check for the token bridge's address as a suffix. Strip
 			// the leading `0x`.
 			if !strings.HasSuffix(destination, strings.ToLower(tokenBridgeAddr.Hex()[2:])) {
-				logger.Warn("event Deposit() detected but destination is not token bridge", 
+				logger.Info("event Deposit() detected but destination is not token bridge", 
 					zap.String("tokenBridge", tokenBridgeAddr.Hex()), 
 					zap.String("destination", destination))
 				continue
@@ -278,14 +323,48 @@ func validateReceipt(
 				zap.String("tokenBridge", tokenBridgeAddr.Hex()), 
 				zap.String("destination", destination))
 
+			if !hasValidPayload {
+				// This can happen if the LogMessagePublished emitted an invalid payload that the
+				// program could not parse.
+				logger.Warn("transfer details could not be parsed from payload. skipping verification of payload's tokenAddress")
+				// TODO: Is the right behaviour to stop execution here?
+				// TODO: should this function return an error in this case?
+				// looksNormal = false
+				// continue
+			} else {
+				if transferDetails.TokenAddress != l.Address {
+					// TODO: This should maybe be Info level. How often does this happen in practice?
+					logger.Warn("event Deposit() detected but event emitter does not match tokenAddress in payload",
+						zap.String("emittedBy", l.Address.Hex()),
+						zap.String("expectedTokenAddress", transferDetails.TokenAddress.Hex()))
+					// XXX: This may be incorrect. Skipping to the next element means that the
+					// transfer will not be marked "normal" and raise an error.
+					// The mismatch between emitter and payload is common for Transfer()s. More
+					// testing is needed to check whether this is an error for Deposit()s.
+					continue
+				}
+			}
+
+			// FIXME: amount is not indexed in the Deposit event. If we want to check this, we may have
+			// to make an external call to a block explorer or possibly parse the block?
+			// depositAmount := big.NewInt(0).SetBytes(l.Topics[AMOUNT_INDEX_DEPOSIT].Bytes())
+			// if amount != depositAmount {
+			// 	logger.Warn("event Deposit() detected but amount does not match token bridge payload", 
+			// 		zap.String("tokenBridge", tokenBridgeAddr.Hex()), 
+			// 		// Output as strings rather than ints to avoid truncation from big.Int into int()
+			// 		zap.String("expectedAmount", amount.String()),
+			// 		zap.String("depositAmount", depositAmount.String()))
+			// }
+
 			looksNormal = true
 			continue // break?
-		} // end check deposit
+		} // end check Depost()
 
-		// Required in the receipt from Token Bridge's transferTokenWithPayload()
+		// Required in the receipt from Token Bridge's transferTokensWithPayload()
 		if l.Topics[0] == common.HexToHash(EVENTHASH_ERC20_TRANSFER) {
 			logger.Debug("transfer occurred: Transfer() topic found", 
 				zap.Int("logIndex", i))
+			transferCount += 1
 
 			if len(l.Topics) != TOPICS_COUNT_TRANSFER {
 				logger.Warn("event Transfer() detected but has wrong number of topics", 
@@ -303,25 +382,132 @@ func validateReceipt(
 			// The topic is prepended with 0s so check for the token bridge's address as a suffix. Strip
 			// the leading `0x`.
 			if !strings.HasSuffix(destination, strings.ToLower(tokenBridgeAddr.Hex()[2:])) {
-				logger.Warn("event Transfer() detected but destination is not token bridge", 
+				// This can happen if multiple Transfers occur in the same receipt. It is common
+				// when third party apps make use of the token bridge.
+				logger.Info("event Transfer() detected but destination is not token bridge", 
 					zap.String("tokenBridge", tokenBridgeAddr.Hex()), 
 					zap.String("destination", destination))
+
+
+				if destination == ZERO_ADDRESS {
+					logger.Info("event Transfer() is a burn (destination is zero address)")
+					burn = true
+				}
 				continue
 			}
-
 			logger.Debug("event Transfer()'s destination is token bridge", 
 				zap.String("tokenBridge", tokenBridgeAddr.Hex()), 
 				zap.String("destination", destination))
 
+			// Check whether the Transfer() event was emitted by the tokenAddress in the payload. This
+			// isn't a requirement but it might be helpful to log this mismatch.
+			// The tokenAddress in the payload may not match the token that emitted the event.
+			// For typical EVM transfers we would expect this to be true, but for cross-chain transfers
+			// the tokenAddress in the payload may target a contract on another chain.
+			if !hasValidPayload {
+				// This can happen if the LogMessagePublished emitted an invalid payload that the
+				// program could not parse.
+				logger.Warn("transfer details could not be parsed from payload. skipping verification of payload's tokenAddress")
+				// TODO: Is the right behaviour to stop execution here?
+				// TODO: should this function return an error in this case?
+				// looksNormal = false
+				// continue
+			} else {
+				// transferDetails is not nil here so we don't have to worry about nil pointer deref
+				if transferDetails.TokenAddress != l.Address {
+					logger.Info("event Transfer() detected but event emitter does not match tokenAddress in payload",
+						zap.String("emittedBy", l.Address.Hex()),
+						zap.String("expectedTokenAddress", transferDetails.TokenAddress.Hex()))
+				} else {
+					logger.Info("event Transfer()'s emitter matches payload's tokenAddress",
+							zap.String("emittedBy", l.Address.Hex()),
+							zap.String("expectedTokenAddress", transferDetails.TokenAddress.Hex()))
+				}
+			}
+
+			logger.Info("marking receipt as 'normal' based on processed logs")
 			looksNormal = true
 			continue // break?
-		} // end check transfer
+		} // end check Transfer()
+
+		// TODO: transferTokens()
+		// TODO: wrapAndTransferETHWithPayload()
 	}
 
 	if !looksNormal {
-		logger.Error("message published from core contract without corresponding Transfer or Deposit", 
+		logger.Error("message published from core contract without Transfer or Deposit to the Token Bridge", 
 			zap.String("txHash", receipt.TxHash.Hex()))
 	}
 
+
+	logger.Info("Receipt statistics",
+		zap.String("inferredTransferType", inferTransferType(transferCount, depositCount, hasValidPayload, burn).String()),
+		zap.Int("erc20Transfers", transferCount),
+		zap.Int("wethDeposits", depositCount),
+		zap.Bool("hasValidPayload", hasValidPayload))
+
 	return uint8(len(receipt.Logs)), err
+}
+
+// inferTransferType guesses the transfer type based on the number of events seen in the receipt and whether the program
+// was able to parse a valid payload from LogMessagePublished.
+// This is limited to known, common ways of interacting with the Token Bridge such as calling its functions directly
+// or via a Token Relayer. Any of these could be combined with other transactions so this should not be considered an
+// exhaustive list.
+func inferTransferType(transferCount int, depositCount int, hasValidPayload bool, burn bool) TransferType {
+	if transferCount == 0 && depositCount == 1 {
+		if hasValidPayload {
+			return WrapAndTransferETHWithPayload
+		} else {
+			return WrapAndTransferETH
+		}
+	}
+	if transferCount == 1 && depositCount == 0 {
+		if hasValidPayload {
+			return TransferTokens
+		} else {
+			return TransferTokensWithPayload
+		}
+	}
+	// See wrapAndTransferEthWithRelay().
+	// https://github.com/wormhole-foundation/example-token-bridge-relayer/blob/main/evm/src/token-bridge-relayer/TokenBridgeRelayer.sol#L152
+	if transferCount == 1 && depositCount == 1 {
+		if hasValidPayload {
+			return WrapAndTransferEthWithRelay
+		}
+	}
+
+	// See transferTokensWithRelay()
+	// https://github.com/wormhole-foundation/example-token-bridge-relayer/blob/main/evm/src/token-bridge-relayer/TokenBridgeRelayer.sol#L99
+	if depositCount == 0 && transferCount == 2 {
+		if hasValidPayload {
+			return TransferTokensWithRelay
+		}
+	}
+	// TODO: Count the typical number of Transfers for things like the Token Relays
+	// wrapAndTransferEthWithRelay
+	// https://github.com/wormhole-foundation/example-token-bridge-relayer/blob/main/evm/src/token-bridge-relayer/TokenBridgeRelayer.sol#L198
+
+	return Unknown
+}
+
+// String returns a string representation for TransferType enum variants. Returns "unknown" for variants not explicitly
+// handled.
+func (t TransferType) String() string {
+	switch t {
+	case WrapAndTransferETH:
+		return "wrapAndTransferETH"
+	case WrapAndTransferETHWithPayload:
+		return "wrapAndTransferETHWithPayload"
+	case TransferTokens:
+		return "transferTokens"
+	case TransferTokensWithPayload:
+		return "transferTokensWithPayload"
+	case WrapAndTransferEthWithRelay:
+		return "wrapAndTransferEthWithRelay"
+	case TransferTokensWithRelay:
+		return "transferTokensWithRelay"
+	default:
+		return "unknown"
+	}
 }
