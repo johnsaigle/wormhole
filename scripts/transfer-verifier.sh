@@ -10,8 +10,9 @@ CORE_CONTRACT="0x98f3c9e6E3fAce36bAAd05FE09d375Ef1464288B"
 # mainnet token bridge contract
 TOKEN_BRIDGE_CONTRACT="0x3ee18B2214AFF97000D974cf647E7C347E8fa585"
 
-ETH_RPC_DEVNET="ws://localhost:8545" # from Tilt, via Anvil. Needs to be websockets so that the eth connector can get notifications
-# ALCHEMY_RPC="" # Your API key goes here
+# Needs to be websockets so that the eth connector can get notifications
+ETH_RPC_DEVNET="ws://localhost:8545" # from Tilt, via Anvil
+# ALCHEMY_RPC="https://eth-mainnet.g.alchemy.com/v2/W_3zJba0mnOqloIkORt7AwJBuocc-YIO"
 
 # RPC="${ALCHEMY_RPC}"
 RPC="${ETH_RPC_DEVNET}"
