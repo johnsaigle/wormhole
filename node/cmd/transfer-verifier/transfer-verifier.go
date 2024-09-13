@@ -1,6 +1,7 @@
 package transferverifier
 
 import (
+	// "bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+
 	// "github.com/ethereum/go-ethereum/log"
 	ipfslog "github.com/ipfs/go-log/v2"
 	"github.com/spf13/cobra"
@@ -49,6 +51,8 @@ const DESTINATION_INDEX_DEPOSIT = 1
 // The expected total number of indexed topics for a WETH Deposit event
 const TOPICS_COUNT_DEPOSIT = 2
 
+const EVM_FIELD_LENGTH = 32
+
 type TransferType int64
 
 const (
@@ -82,8 +86,9 @@ type TransferDetails struct {
 }
 
 // Parse the amount and token address from a raw Ethereum transfer payload
-func parseTransferPayload(data []byte) (*TransferDetails, error) {
+func parseLogMessagePublishedPayload(data []byte) (*TransferDetails, error) {
 	t := TransferDetails{}
+	// https://docs.wormhole.com/wormhole/explore-wormhole/vaa
 
 	// struct Transfer {
 	//     uint8 payloadID;
@@ -110,9 +115,9 @@ func parseTransferPayload(data []byte) (*TransferDetails, error) {
 	// amount is at data[1:1 + 32]
 	// tokenAddress is at data[33:33 + 32]
 
-	// ensure we don't panic due to index out of bounds
-	if len(data) < 65 {
-		return nil, errors.New("Invalid data length")
+	// ensure we don't panic due to index out of bounds. We're indexing up to 1 uint8 and two EVM fields
+	if len(data) <  2 * EVM_FIELD_LENGTH  + 1 {
+		return nil, errors.New("payload data is too short")
 	}
 	t.Amount = big.NewInt(0).SetBytes(data[1 : 1+32])
 	t.TokenAddress = common.BytesToAddress(data[33 : 33+32])
@@ -204,16 +209,16 @@ func runTransferVerifier(cmd *cobra.Command, args []string) {
 			logger.Debug("processing LogMessagePublished event",
 				zap.String("txHash", vLog.Raw.TxHash.String()))
 
-			logger.Debug("parsing data payload",
+			logger.Debug("parsing LogMessagePublished payload",
 				zap.String("payload", fmt.Sprintf("%x", vLog.Payload)))
-			transferDetails, err := parseTransferPayload(vLog.Payload)
+			transferDetails, err := parseLogMessagePublishedPayload(vLog.Payload)
 			if err != nil {
 				// This should never occur when parsing well-formed payloads from the Token Bridge
-				logger.Warn("error when parsing data payload", zap.Error(err))
+				logger.Warn("error when parsing LogMessagePublished payload", zap.Error(err))
 			}
 			if transferDetails != nil {
 				// nil check should be redundant after checking err, but this avoids nil pointer deref
-				logger.Debug("expected transfer token", zap.String("tokenAddress", transferDetails.TokenAddress.String()))
+				logger.Debug("expected transfer token", zap.String("tokenAddress", transferDetails.TokenAddress.Hex()))
 				logger.Debug("expected transfer amount", zap.String("amount", transferDetails.Amount.String()))
 			}
 
@@ -225,7 +230,7 @@ func runTransferVerifier(cmd *cobra.Command, args []string) {
 
 			numProcessed, err := validateReceipt(receipt, tokenBridgeAddr, transferDetails, logger)
 			if numProcessed == 0 {
-				logger.Warn("receipt logs empty for tx", zap.String("txHash", vLog.Raw.TxHash.String()))
+				logger.Warn("receipt logs empty for tx", zap.String("txHash", vLog.Raw.TxHash.Hex()))
 				continue
 			}
 			if err != nil {
@@ -293,7 +298,7 @@ func validateReceipt(
 		// Debug information for the log and its topics
 		logger.Debug("processing receipt log",
 			zap.Int("index", i),
-			zap.String("emittedBy", log.Address.String()))
+			zap.String("emittedBy", log.Address.Hex()))
 		for i, topic := range log.Topics {
 			logger.Debug("topic info", zap.String("topic", topic.Hex()), zap.Int("index", i))
 		}
@@ -304,6 +309,10 @@ func validateReceipt(
 				zap.Int("logIndex", i))
 			depositCount += 1
 
+			logger.Debug("deposit data:", 
+				zap.String("data", fmt.Sprintf("%x", log.Data)))
+				zap.Int("length", len(log.Data))
+
 			structureError := validateDeposit(log)
 			if structureError != nil {
 				logger.Warn("invalid Deposit() logs: ", zap.Error(structureError))
@@ -312,16 +321,18 @@ func validateReceipt(
 
 			// Extra logging
 			if !hasValidPayload {
-				// This can happen if the LogMessagePublished emitted an invalid payload that the
-				// program could not parse.
-				logger.Warn("transfer details could not be parsed from payload. skipping verification of payload's tokenAddress")
+				// This can happen if the LogMessagePublished emitted an invalid payload that this
+				// program could not parse. Note that this payload refers to the payload of the
+				// EVM log, and not to Wormhole's use of the term in the context of VAAs.
+				logger.Warn("transfer details could not be parsed from LogMessagePublished payload. skipping verification of payload's tokenAddress")
 			} else {
 				logPayloadStatus(transferDetails.TokenAddress, log.Address, logger)
 			}
 
 			tokensWentIn = depositRecipientIsTokenBridge(log, &tokenBridgeAddr, logger)
+			amountsMatch := amountsMatch(log, transferDetails.Amount, logger)
 
-			if tokensWentIn {
+			if tokensWentIn && amountsMatch {
 				logger.Info("marking receipt as 'normal' based on processed logs")
 				looksNormal = true
 				continue
@@ -334,6 +345,10 @@ func validateReceipt(
 				zap.Int("logIndex", i))
 			transferCount += 1
 
+			logger.Debug("transfer data:", 
+				zap.String("data", fmt.Sprintf("%x", log.Data)),
+				zap.Int("length", len(log.Data)))
+
 			structureError := validateTransfer(log)
 			if structureError != nil {
 				logger.Warn("invalid Transfer() logs: ", zap.Error(structureError))
@@ -343,14 +358,19 @@ func validateReceipt(
 			// Extra logging
 			if !hasValidPayload {
 				// This can happen if the LogMessagePublished emitted an invalid payload that the
-				// program could not parse.
+				// program could not parse. Here we Warn but it won't be possible for this transfer to
+				// pass validation later and will eventually result in an Error.
+				// The main purpose of this check is to avoid a nil dereference later in the program
+				// if `transferDetails` is nil.
 				logger.Warn("transfer details could not be parsed from payload. skipping verification of payload's tokenAddress")
 			} else {
 				logPayloadStatus(transferDetails.TokenAddress, log.Address, logger)
 			}
 
 			tokensWentIn, burn = transferDestinationIsTokenBridge(log, &tokenBridgeAddr, logger)
-			if tokensWentIn {
+			amountsMatch := amountsMatch(log, transferDetails.Amount, logger)
+
+			if tokensWentIn && amountsMatch {
 				logger.Info("marking receipt as 'normal' based on processed logs")
 				looksNormal = true
 				continue
@@ -373,10 +393,16 @@ func validateReceipt(
 	return uint8(len(receipt.Logs)), err
 }
 
+// validateDeposit returns an error if  the Deposit event is not well-formed
 func validateDeposit(
 	log *types.Log,
 ) error {
-	count := len(log.Topics) 
+	// We expect exactly one field here: the amount.
+	if len(log.Data) != EVM_FIELD_LENGTH {
+		return fmt.Errorf("event Deposit() detected but log data is invalid")
+	}
+	// e.g. https://etherscan.io/tx/0x163dd63e8327b494bd22de9b83984fed82e7a6a9af100dbee8ac5c1ade6dea1b/advanced#eventlog
+	count := len(log.Topics)
 	// Ensure that the Deposit log has the right number of topics so we don't index into topics that aren't there.
 	if count != TOPICS_COUNT_DEPOSIT {
 		return fmt.Errorf("event Deposit() detected but has wrong number of topics. Got %d, expected %d", TOPICS_COUNT_DEPOSIT, count)
@@ -384,10 +410,15 @@ func validateDeposit(
 	return nil
 }
 
+// validTransfer returns an error if  the Transfer event is not well-formed
 func validateTransfer(
 	log *types.Log,
 ) error {
-	count := len(log.Topics) 
+	// We expect exactly one field here: the amount.
+	if len(log.Data) != EVM_FIELD_LENGTH {
+		return fmt.Errorf("event Transfer() detected but log data is invalid")
+	}
+	count := len(log.Topics)
 	expected := TOPICS_COUNT_TRANSFER
 	// Ensure that the Deposit log has the right number of topics so we don't index into topics that aren't there.
 	if count != expected {
@@ -397,8 +428,9 @@ func validateTransfer(
 }
 
 func depositRecipientIsTokenBridge(
+	// Deposit() log
 	log *types.Log,
-	tokenBridgeAddr *common.Address, 
+	tokenBridgeAddr *common.Address,
 	logger *zap.Logger,
 ) (found bool) {
 	destination := strings.ToLower(log.Topics[DESTINATION_INDEX_DEPOSIT].Hex())
@@ -417,10 +449,40 @@ func depositRecipientIsTokenBridge(
 	return true
 }
 
-func transferDestinationIsTokenBridge(
+// amountsMatch compares the log's contents with the amount figure parsed from the LogMessagePublished event's payload.
+func amountsMatch(
+	// Transfer() or Deposit() log
 	log *types.Log,
-	tokenBridgeAddr *common.Address, 
-logger *zap.Logger) (found bool, burn bool) {
+	// Value from LogMessagePublished's payload
+	payloadAmount *big.Int,
+	logger *zap.Logger,
+) bool {
+	logDataAmount := big.NewInt(0).SetBytes(log.Data[2:]) // remove `0x` prefix
+
+	// big.Ints can't use `==` because it compares the pointers, not the values
+	if logDataAmount.Cmp(payloadAmount) != 0 {
+		logger.Info("amounts do not match",
+			zap.String("transferAmount", fmt.Sprintf("%d", logDataAmount)),
+			zap.String("payloadAmount", fmt.Sprintf("%d", payloadAmount)))
+		return false
+	}
+	logger.Info("amounts match",
+		zap.String("transferAmount", fmt.Sprintf("%d", logDataAmount)),
+		zap.String("payloadAmount", fmt.Sprintf("%d", payloadAmount)))
+	return true
+
+}
+
+// transferDestinationIsTokenBridge returns whether the Transfer()'s destination is the Token Bridge.
+// Returns two booleans: `found` if the destination matches. `burn` if the destination is the zero-address, which
+// means that the token was burned rather than transferred to the Token Bridge. Consequently, it's not possible
+// for both return values to be `true`.
+func transferDestinationIsTokenBridge(
+	// Transfer() log
+	log *types.Log,
+	tokenBridgeAddr *common.Address,
+	logger *zap.Logger,
+) (found bool, burn bool) {
 	found = false
 	burn = false
 	destination := strings.ToLower(log.Topics[DESTINATION_INDEX_TRANSFER].Hex())
@@ -440,7 +502,6 @@ logger *zap.Logger) (found bool, burn bool) {
 		}
 		return false, burn
 	}
-
 
 	logger.Debug("event Transfer()'s destination is token bridge",
 		zap.String("tokenBridge", tokenBridgeAddr.Hex()),
@@ -499,12 +560,12 @@ func inferTransferType(transferCount int, depositCount int, hasValidPayload bool
 // For typical EVM transfers we would expect this to be true, but for cross-chain transfers
 // the tokenAddress in the payload may target a contract on another chain.
 func logPayloadStatus(payloadTokenAddress common.Address, emitter common.Address, logger *zap.Logger) {
-	if  payloadTokenAddress != emitter {
+	if payloadTokenAddress != emitter {
 		logger.Info("event emitter does not match tokenAddress in payload",
 			zap.String("emittedBy", emitter.Hex()),
 			zap.String("expectedTokenAddress", payloadTokenAddress.Hex()))
 		return
-	} 
+	}
 
 	logger.Info("event emitter matches tokenAddress in payload",
 		zap.String("emittedBy", emitter.Hex()),
