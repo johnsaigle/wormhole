@@ -116,7 +116,7 @@ func parseLogMessagePublishedPayload(data []byte) (*TransferDetails, error) {
 	// tokenAddress is at data[33:33 + 32]
 
 	// ensure we don't panic due to index out of bounds. We're indexing up to 1 uint8 and two EVM fields
-	if len(data) <  2 * EVM_FIELD_LENGTH  + 1 {
+	if len(data) < 2*EVM_FIELD_LENGTH+1 {
 		return nil, errors.New("payload data is too short")
 	}
 	t.Amount = big.NewInt(0).SetBytes(data[1 : 1+32])
@@ -189,8 +189,8 @@ func runTransferVerifier(cmd *cobra.Command, args []string) {
 
 	// TODO: Store processed TXs in map
 	// NOTE: Add a timer to clear the map
-	countLogsProcessed := uint(0)
-	livenessInterval := uint(2)
+	countLogsProcessed := int(0)
+	livenessInterval := int(2)
 	for {
 		select {
 		case err := <-sub.Err():
@@ -239,10 +239,10 @@ func runTransferVerifier(cmd *cobra.Command, args []string) {
 			}
 
 			// Basic liveness report and statistics
-			countLogsProcessed += uint(numProcessed)
+			countLogsProcessed += int(numProcessed)
 			// TODO fix with a total count and a trigger
 			if countLogsProcessed%livenessInterval == 0 {
-				logger.Info("total logs processed:", zap.Uint("count", countLogsProcessed))
+				logger.Info("total logs processed:", zap.Int("count", countLogsProcessed))
 			}
 		}
 	}
@@ -260,7 +260,7 @@ func validateReceipt(
 	tokenBridgeAddr common.Address,
 	// The uint256 amount parsed from the payload of LogMessagePublished
 	transferDetails *TransferDetails,
-	logger *zap.Logger) (numProcessed uint8, err error) {
+	logger *zap.Logger) (numProcessed int, err error) {
 
 	// Sanity check. Shouldn't be necessary but no harm
 	if receipt.Status != 1 {
@@ -272,8 +272,6 @@ func validateReceipt(
 	// The number of WETH Deposit() events that occurred in this receipt
 	depositCount := 0
 
-	// Whether a burn occurred: a Transfer() to the zero-address. Used to infer the TransferType.
-	burn := false
 	// Whether a Transfer or Deposit has the token bridge as the destination
 	tokensWentIn := false
 	// Whether the transfer overall is benign
@@ -309,9 +307,9 @@ func validateReceipt(
 				zap.Int("logIndex", i))
 			depositCount += 1
 
-			logger.Debug("deposit data:", 
-				zap.String("data", fmt.Sprintf("%x", log.Data)))
-				zap.Int("length", len(log.Data))
+			logger.Debug("deposit data:",
+				zap.String("data", fmt.Sprintf("%x", log.Data)),
+				zap.Int("length", len(log.Data)))
 
 			structureError := validateDeposit(log)
 			if structureError != nil {
@@ -330,7 +328,7 @@ func validateReceipt(
 			}
 
 			tokensWentIn = depositRecipientIsTokenBridge(log, &tokenBridgeAddr, logger)
-			amountsMatch := amountsMatch(log, transferDetails.Amount, logger)
+			amountsMatch := amountsCorrespond(log, transferDetails.Amount, logger)
 
 			if tokensWentIn && amountsMatch {
 				logger.Info("marking receipt as 'normal' based on processed logs")
@@ -345,7 +343,7 @@ func validateReceipt(
 				zap.Int("logIndex", i))
 			transferCount += 1
 
-			logger.Debug("transfer data:", 
+			logger.Debug("transfer data:",
 				zap.String("data", fmt.Sprintf("%x", log.Data)),
 				zap.Int("length", len(log.Data)))
 
@@ -367,8 +365,8 @@ func validateReceipt(
 				logPayloadStatus(transferDetails.TokenAddress, log.Address, logger)
 			}
 
-			tokensWentIn, burn = transferDestinationIsTokenBridge(log, &tokenBridgeAddr, logger)
-			amountsMatch := amountsMatch(log, transferDetails.Amount, logger)
+			tokensWentIn = transferDestinationIsTokenBridge(log, &tokenBridgeAddr, logger)
+			amountsMatch := amountsCorrespond(log, transferDetails.Amount, logger)
 
 			if tokensWentIn && amountsMatch {
 				logger.Info("marking receipt as 'normal' based on processed logs")
@@ -385,12 +383,12 @@ func validateReceipt(
 	}
 
 	logger.Info("Receipt statistics",
-		zap.String("inferredTransferType", inferTransferType(transferCount, depositCount, hasValidPayload, burn).String()),
+		zap.String("inferredTransferType", inferTransferType(transferCount, depositCount, hasValidPayload).String()),
 		zap.Int("erc20Transfers", transferCount),
 		zap.Int("wethDeposits", depositCount),
 		zap.Bool("hasValidPayload", hasValidPayload))
 
-	return uint8(len(receipt.Logs)), err
+	return int(len(receipt.Logs)), err
 }
 
 // validateDeposit returns an error if  the Deposit event is not well-formed
@@ -449,8 +447,8 @@ func depositRecipientIsTokenBridge(
 	return true
 }
 
-// amountsMatch compares the log's contents with the amount figure parsed from the LogMessagePublished event's payload.
-func amountsMatch(
+// amountsCorrespond compares the log's contents with the amount figure parsed from the LogMessagePublished event's payload.
+func amountsCorrespond(
 	// Transfer() or Deposit() log
 	log *types.Log,
 	// Value from LogMessagePublished's payload
@@ -458,33 +456,95 @@ func amountsMatch(
 	logger *zap.Logger,
 ) bool {
 	logDataAmount := big.NewInt(0).SetBytes(log.Data[2:]) // remove `0x` prefix
+	smaller := big.NewInt(0)
+	larger := big.NewInt(0)
 
 	// big.Ints can't use `==` because it compares the pointers, not the values
-	if logDataAmount.Cmp(payloadAmount) != 0 {
-		logger.Info("amounts do not match",
+	switch logDataAmount.Cmp(payloadAmount) {
+	case 0:
+		logger.Info("amounts match",
 			zap.String("transferAmount", fmt.Sprintf("%d", logDataAmount)),
 			zap.String("payloadAmount", fmt.Sprintf("%d", payloadAmount)))
-		return false
+		return true
+	case 1:
+		larger = logDataAmount
+		smaller = payloadAmount
+	case -1:
+		larger = payloadAmount
+		smaller = logDataAmount
 	}
-	logger.Info("amounts match",
+	logger.Info("amounts do not match",
 		zap.String("transferAmount", fmt.Sprintf("%d", logDataAmount)),
 		zap.String("payloadAmount", fmt.Sprintf("%d", payloadAmount)))
-	return true
 
+	likelyNormalized, err := amountLikelyNormalized(larger, smaller)
+	if err != nil {
+		logger.Warn("error when checking amounts. this is probably a bug.",
+			zap.Error(err))
+		return false
+	}
+	if likelyNormalized {
+		logger.Info("amounts are likely normalized")
+	}
+	return likelyNormalized
+}
+
+// amountLikelyNormalized determines whether two values are likely to be normalized version of each other.
+// The amounts may not be an exact match due to the normalization process.
+// See https://github.com/wormhole-foundation/wormhole/blob/main/whitepapers/0003_token_bridge.md#handling-of-token-amounts-and-decimals
+// The receipt log does not contain information about the correct number of decimals on either side.
+// To avoid adding latency here via making an RPC request to the contract address, we use some heuristics
+// to determine whether the amounts appear to be normalized versions of each other.
+func amountLikelyNormalized(larger *big.Int, smaller *big.Int) (bool, error) {
+	zero := big.NewInt(0)
+	ten := big.NewInt(10)
+
+	// Basic validation
+	err := errors.New("arguments to amountLikelyNormalized invalid")
+	if larger.Cmp(zero) == 0 || smaller.Cmp(zero) == 0 {
+		// Mandatory check or else division by zero may occur
+		return false, errors.Join(err, errors.New("arguments must not be zero"))
+	}
+	if larger.Cmp(smaller) != 1 {
+		// This also ensures that the arguments are not equal
+		return false, errors.Join(err, errors.New("argument 'larger' must be greater than argument 'smaller'"))
+	}
+	if larger.Cmp(zero) != 1 || smaller.Cmp(zero) != 1 {
+		return false, errors.Join(err, errors.New("arguments must be positive"))
+	}
+
+	// Effectively do a `log10(larger)` and make sure that it equals `smaller`. This ensures some mathematical
+	// properties that must hold for scaled/normalized amounts, e.g.:
+	// - smaller is a factor of larger
+	// - larger is divisible by 10
+
+	// placeholder value. An intermediate value that is a representation of `larger` divided by some power of 10.
+	n := larger
+	for {
+		// End the loop. Intermediate value cannot be evenly divided by 10.
+		// Should be non-infinite because the values are non equal and non zero
+		if big.NewInt(1).Mod(n, ten).Cmp(zero) != 0 {
+			break
+		}
+
+		if n.Cmp(smaller) == 0 {
+			// We're done: smaller == log10(larger), so larger is the normalized representation of smaller
+			break
+		}
+		n.Div(n, ten)
+	}
+
+	return n.Cmp(smaller) == 0, nil
 }
 
 // transferDestinationIsTokenBridge returns whether the Transfer()'s destination is the Token Bridge.
-// Returns two booleans: `found` if the destination matches. `burn` if the destination is the zero-address, which
-// means that the token was burned rather than transferred to the Token Bridge. Consequently, it's not possible
-// for both return values to be `true`.
+// Returns two booleans: `found` if the destination matches.
 func transferDestinationIsTokenBridge(
 	// Transfer() log
 	log *types.Log,
 	tokenBridgeAddr *common.Address,
 	logger *zap.Logger,
-) (found bool, burn bool) {
-	found = false
-	burn = false
+) bool {
 	destination := strings.ToLower(log.Topics[DESTINATION_INDEX_TRANSFER].Hex())
 
 	// The topic is prepended with 0s so check for the token bridge's address as a suffix. Strip
@@ -498,16 +558,15 @@ func transferDestinationIsTokenBridge(
 
 		if destination == ZERO_ADDRESS {
 			logger.Info("event Transfer() is a burn (destination is zero address)")
-			burn = true
 		}
-		return false, burn
+		return false
 	}
 
 	logger.Debug("event Transfer()'s destination is token bridge",
 		zap.String("tokenBridge", tokenBridgeAddr.Hex()),
 		zap.String("destination", destination))
 
-	return true, burn
+	return true
 }
 
 // inferTransferType guesses the transfer type based on the number of events seen in the receipt and whether the program
@@ -515,7 +574,7 @@ func transferDestinationIsTokenBridge(
 // This is limited to known, common ways of interacting with the Token Bridge such as calling its functions directly
 // or via a Token Relayer. Any of these could be combined with other transactions so this should not be considered an
 // exhaustive list.
-func inferTransferType(transferCount int, depositCount int, hasValidPayload bool, burn bool) TransferType {
+func inferTransferType(transferCount int, depositCount int, hasValidPayload bool) TransferType {
 	// Simple transfer of wrapped ETH
 	if transferCount == 0 && depositCount == 1 {
 		if hasValidPayload {
