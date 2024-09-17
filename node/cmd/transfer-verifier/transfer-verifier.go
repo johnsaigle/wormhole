@@ -199,6 +199,7 @@ func parseLogMessagePublishedPayload(data []byte, tokenBridgeAddr common.Address
 		unwrappedTokenAddress, err := unwrapIfWrapped(rawTokenAddress, tokenChain, tokenBridgeAddr, ethConnector, logger)
 		if err != nil {
 			logger.Fatal("a fatal error ocurred when attempting to unwrap a token address")
+			return &t, err
 		}
 
 		tokenAddress = unwrappedTokenAddress
@@ -209,7 +210,8 @@ func parseLogMessagePublishedPayload(data []byte, tokenBridgeAddr common.Address
 	if err != nil {
 		logger.Fatal("a fatal error ocurred when attempting to get decimals",
 			zap.Error(err),
-			)
+		)
+		return &t, err
 	}
 	denormalizedAmount := denormalize(amount, decimals)
 
@@ -408,6 +410,7 @@ func getDecimals(
 	if err != nil || len(result) < 32 {
 		logger.Fatal("failed to get decimals for token",
 			zap.String("tokenAddress", tokenAddress.String()))
+		return 0, err
 	}
 
 	// TODO: find out if there is some official documentation for why this uint8 is in the last index of the 32byte return.
@@ -457,6 +460,7 @@ func unwrapIfWrapped(
 	if err != nil {
 		logger.Fatal("failed to get mapping for token",
 			zap.String("tokenAddress", tokenAddressAsKey))
+		return unwrappedTokenAddress, err
 	}
 
 	tokenAddressNative := common.BytesToAddress(result)
