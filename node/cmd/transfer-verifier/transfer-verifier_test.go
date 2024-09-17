@@ -3,39 +3,36 @@ import (
 	"testing"
 	"math/big"
 	// "github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
+	// "github.com/stretchr/testify/require"
 )
 
-func TestAmountLikelyNormalized(t *testing.T) {
+func TestDenormalize(t *testing.T) {
 	t.Parallel() // marks TLog as capable of running in parallel with other tests
 	tests := map[string] struct {
-		larger *big.Int
-		smaller *big.Int
-		expected bool
+		amount *big.Int
+		decimals uint8
+		expected *big.Int
 	} {
-		"happy path":  {
-			larger: big.NewInt(123000),
-			smaller: big.NewInt(123),
-			expected: true,
+		"noop: decimals less than 8":  {
+			amount: big.NewInt(123000),
+			decimals: 1,
+			expected:big.NewInt(123000), 
 		},
-		"amounts do not match":  {
-			larger: big.NewInt(123000),
-			smaller: big.NewInt(456),
-			expected: false,
+		"noop: decimals equal to 8":  {
+			amount: big.NewInt(123000),
+			decimals: 8,
+			expected:big.NewInt(123000), 
 		},
-		// "one character": {
-		//   input: "x",
-		//   result: "x",
-		// },
-		// "one multi byte glyph": {
-		//   input: "🎉",
-		//   result: "🎉",
-		// },
-		// "string with multiple multi-byte glyphs": {
-		//   input: "🥳🎉🐶",
-		//   result: "🐶🎉🥳",
-		// },
+		"denormalize: decimals greater than 8":  {
+			amount:big.NewInt(123000), 
+			decimals: 12,
+			expected: big.NewInt(1230000000),
+		},
+		"denormalize: decimals at maximum expected size":  {
+			amount: big.NewInt(123_000_000), 
+			decimals: 18,
+			expected: big.NewInt(1_230_000_000_000_000_000),
+		},
 	}
 	for name, test := range tests {
 		test := test // NOTE: uncomment for Go < 1.22, see /doc/faq#closures_and_goroutines
@@ -43,13 +40,12 @@ func TestAmountLikelyNormalized(t *testing.T) {
 			t.Parallel() // marks each test case as capable of running in parallel with each other 
 			t.Log(name)
 
-			if got, err := amountLikelyNormalized(test.larger, test.smaller); got != test.expected {
-				require.NoError(t, err)
-				t.Fatalf("amountLikelyNormalized(%s, %s) returned %t; expected %t",
-					test.larger,
-					test.smaller,
+			if got := denormalize(test.amount, test.decimals); got.Cmp(test.expected) != 0 {
+				t.Fatalf("denormalize(%s, %d) returned %s; expected %s",
+					test.amount.String(),
+					test.decimals,
 					got,
-					test.expected,
+					test.expected.String(),
 				)
 			}
 	
