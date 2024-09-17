@@ -205,10 +205,13 @@ func parseLogMessagePublishedPayload(data []byte, tokenBridgeAddr common.Address
 	}
 
 	// Denormalize the token amount.
-	denormalizedAmount, err := denormalize(amount, tokenAddress, ethConnector, logger)
+	decimals, err := getDecimals(tokenAddress, ethConnector, logger)
 	if err != nil {
-		logger.Fatal("a fatal error ocurred when attempting to denormalize a token amount")
+		logger.Fatal("a fatal error ocurred when attempting to get decimals",
+			zap.Error(err),
+			)
 	}
+	denormalizedAmount := denormalize(amount, decimals)
 
 	t.Amount = new(big.Int).Set(denormalizedAmount)
 	t.TokenAddress = tokenAddress
@@ -363,20 +366,10 @@ func runTransferVerifier(cmd *cobra.Command, args []string) {
 	}
 }
 
-// TODO: write tests
 func denormalize(
 	amount *big.Int,
-	tokenAddress common.Address,
-	ethConnector *connectors.EthereumBaseConnector,
-	logger *zap.Logger) (denormalizedAmount *big.Int, err error) {
-	ctx := context.TODO()
-
-	decimals, err := getDecimals(ctx, tokenAddress, ethConnector, logger)
-	if err != nil {
-		logger.Fatal("failed to get decimals for token",
-			zap.String("tokenAddress", tokenAddress.String()))
-	}
-
+	decimals uint8,
+) (denormalizedAmount *big.Int) {
 	if decimals > 8 {
 		// Scale from 8 decimals to `decimals`
 		exponent := new(big.Int).SetInt64(int64(decimals - 8))
@@ -388,15 +381,15 @@ func denormalize(
 		denormalizedAmount = new(big.Int).Set(amount)
 	}
 
-	return denormalizedAmount, nil
+	return denormalizedAmount
 }
 
 // TODO: write tests
 func getDecimals(
-	ctx context.Context,
 	tokenAddress common.Address,
 	ethConnector *connectors.EthereumBaseConnector,
 	logger *zap.Logger) (decimals uint8, err error) {
+	ctx := context.TODO()
 
 	// First check if this token's decimals is stored in cache
 	if _, exists := decimalsCache[tokenAddress]; exists {
