@@ -32,17 +32,22 @@ import (
 	"github.com/certusone/wormhole/node/pkg/watchers/evm/connectors/ethabi"
 )
 
-// LogMessagePublished(address indexed sender, uint64 sequence, uint32 nonce, bytes payload, uint8 consistencyLevel);
-const EVENTHASH_WORMHOLE_LOG_MESSAGE_PUBLISHED = "0x6eb224fb001ed210e379b335e35efe88672a8ce935d981a6896b27ffdf52a3b2"
+// Event signatures
+const (
+	// LogMessagePublished(address indexed sender, uint64 sequence, uint32 nonce, bytes payload, uint8 consistencyLevel);
+	EVENTHASH_WORMHOLE_LOG_MESSAGE_PUBLISHED = "0x6eb224fb001ed210e379b335e35efe88672a8ce935d981a6896b27ffdf52a3b2"
+	// Transfer(address,address,uint256)
+	EVENTHASH_ERC20_TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+	// Deposit(address,uint256)
+	EVENTHASH_WETH_DEPOSIT = "0xe1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2402c5c5cc9109c"
+)
 
-// Transfer(address,address,uint256)
-const EVENTHASH_ERC20_TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+// Fixed addresses
+const (
+	ZERO_ADDRESS = "0x0000000000000000000000000000000000000000000000000000000000000000"
+)
 
-// Deposit(address,uint256)
-const EVENTHASH_WETH_DEPOSIT = "0xe1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2402c5c5cc9109c"
-
-const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000000000000000000000000000"
-
+// https://etherscan.io/token/0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2
 var WETH_ADDRESS = common.HexToAddress("c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2")
 
 // Standard ERC20 Transfer constants. Note that `_value` (amount) is not indexed.
@@ -78,18 +83,6 @@ var (
 	ERC20_DECIMALS_SIGNATURE = []byte("\x31\x3c\xe5\x67")
 )
 
-type TransferType int64
-
-const (
-	Unknown TransferType = iota
-	WrapAndTransferETH
-	WrapAndTransferETHWithPayload
-	TransferTokensWithPayload
-	TransferTokens
-	WrapAndTransferEthWithRelay
-	TransferTokensWithRelay
-)
-
 // Global caches
 var (
 	// Holds previously-recorded decimals (uint8) for token addresses (common.Address)
@@ -116,6 +109,15 @@ var TransferVerifierCmd = &cobra.Command{
 	Run:   runTransferVerifier,
 }
 
+// Settings for how often to prune the processed receipts.
+type pruneConfig struct {
+	// The block height at which to prune receipts, represented as an offset to subtract from the latest block
+	// height, e.g. a pruneHeightDelta of 10 means prune blocks older than latestBlockHeight - 10.
+	pruneHeightDelta uint64
+	// How often to prune the cache.
+	pruneFrequency time.Duration
+}
+
 type TransferDetails struct {
 	TokenAddress common.Address
 	TokenChain   uint16
@@ -126,7 +128,7 @@ func parseERC20TransferEvent(logTopics []common.Hash, logData []byte) (from comm
 
 	// https://github.com/OpenZeppelin/openzeppelin-contracts/blob/6e224307b44bc4bd0cb60d408844e028cfa3e485/contracts/token/ERC20/IERC20.sol#L16
 	// event Transfer(address indexed from, address indexed to, uint256 value)
-	if len(logData) != 32 || len(logTopics) != 3 {
+	if len(logData) != 32 || len(logTopics) != TOPICS_COUNT_TRANSFER {
 		return common.Address{}, common.Address{}, nil
 	}
 
@@ -142,7 +144,7 @@ func parseWethDepositEvent(logTopics []common.Hash, logData []byte) (destination
 
 	// https://etherscan.io/token/0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2#code#L29
 	// event  Deposit(address indexed dst, uint wad);
-	if len(logData) != 32 || len(logTopics) != 2 {
+	if len(logData) != 32 || len(logTopics) != TOPICS_COUNT_DEPOSIT {
 		return common.Address{}, nil
 	}
 
@@ -152,7 +154,7 @@ func parseWethDepositEvent(logTopics []common.Hash, logData []byte) (destination
 	return destination, amount
 }
 
-// Parse the amount and token address from a raw Ethereum transfer payload
+// parseLogMessagePublishedPayload() parses the details of a transfer from a LogMessagePublished event emitted by the core contract.
 func parseLogMessagePublishedPayload(data []byte, tokenBridgeAddr common.Address, ethConnector *connectors.EthereumBaseConnector, logger *zap.Logger) (*TransferDetails, error) {
 	t := TransferDetails{}
 
@@ -198,7 +200,7 @@ func parseLogMessagePublishedPayload(data []byte, tokenBridgeAddr common.Address
 	} else {
 		unwrappedTokenAddress, err := unwrapIfWrapped(rawTokenAddress, tokenChain, tokenBridgeAddr, ethConnector, logger)
 		if err != nil {
-			logger.Fatal("a fatal error ocurred when attempting to unwrap a token address")
+			logger.Fatal("a fatal error occurred when attempting to unwrap a token address")
 			return &t, err
 		}
 
@@ -208,7 +210,7 @@ func parseLogMessagePublishedPayload(data []byte, tokenBridgeAddr common.Address
 	// Denormalize the token amount.
 	decimals, err := getDecimals(tokenAddress, ethConnector, logger)
 	if err != nil {
-		logger.Fatal("a fatal error ocurred when attempting to get decimals",
+		logger.Fatal("a fatal error occurred when attempting to get decimals",
 			zap.Error(err),
 		)
 		return &t, err
@@ -221,6 +223,7 @@ func parseLogMessagePublishedPayload(data []byte, tokenBridgeAddr common.Address
 	return &t, nil
 }
 
+// CLI parameters
 func init() {
 	// envStr = TransferVerifierCmd.Flags().String("env", "", `environment (may be "testnet" or "mainnet")`)
 	logLevel = TransferVerifierCmd.Flags().String("logLevel", "info", "Logging level (debug, info, warn, error, dpanic, panic, fatal)")
@@ -231,6 +234,12 @@ func init() {
 
 // Note: logger.Error should be reserved only for conditions that break the invariants of the Token Bridge
 func runTransferVerifier(cmd *cobra.Command, args []string) {
+
+	// TODO: Should these be CLI parameters?
+	pruneConfig := &pruneConfig{
+		pruneHeightDelta: uint64(10),
+		pruneFrequency:   time.Duration(1 * time.Minute),
+	}
 
 	// Setup logging
 	lvl, err := ipfslog.LevelFromString(*logLevel)
@@ -247,7 +256,7 @@ func runTransferVerifier(cmd *cobra.Command, args []string) {
 	logger.Debug("core contract", zap.String("address", *coreContract))
 	logger.Debug("token bridge contract", zap.String("address", *tokenBridgeContract))
 
-	// Verify parameters
+	// Verify CLI parameters
 	if *RPC == "" || *coreContract == "" || *tokenBridgeContract == "" {
 		logger.Fatal(
 			"Must supply RPC, coreContract, and tokenContract",
@@ -258,18 +267,18 @@ func runTransferVerifier(cmd *cobra.Command, args []string) {
 	}
 	*coreContract = strings.ToLower(*coreContract)
 	*tokenBridgeContract = strings.ToLower(*tokenBridgeContract)
+	coreBridgeAddr := common.HexToAddress(*coreContract)
+	tokenBridgeAddr := common.HexToAddress(*tokenBridgeContract)
 
+	// Create the RPC connection, context, and channels
 	ctx, ctxCancel := context.WithCancel(context.Background())
 	defer ctxCancel()
 
-	coreBridgeAddr := common.HexToAddress(*coreContract)
 	ethConnector, err := connectors.NewEthereumBaseConnector(ctx, "eth", *RPC, coreBridgeAddr, logger)
 	if err != nil {
 		logger.Fatal("could not create new ethereum base connector",
 			zap.Error(err))
 	}
-
-	tokenBridgeAddr := common.HexToAddress(*tokenBridgeContract)
 
 	logs := make(chan *ethabi.AbiLogMessagePublished)
 	errC := make(chan error)
@@ -285,29 +294,30 @@ func runTransferVerifier(cmd *cobra.Command, args []string) {
 
 	// Counter for amount of logs processed
 	countLogsProcessed := int(0)
-	livenessInterval := int(2)
 
 	// Mapping to track the transactions that have been processed
 	processedTransactions := make(map[common.Hash]*types.Receipt)
 
 	// The latest transaction block number, used to determine the size of historic receipts to keep in memory
-	// TODO: globalize the pruning mechanism's config (time for ticker, and block count in for loop)
 	lastBlockNumber := uint64(0)
 
 	// Ticker to clear historic transactions that have been processed
-	ticker := time.NewTicker(1 * time.Minute)
+	ticker := time.NewTicker(pruneConfig.pruneFrequency)
+	defer ticker.Stop() // delete for Go >= 1.23. See time.NewTicker() documentation.
 	for {
 		select {
 		case err := <-sub.Err():
 			logger.Fatal("got error on ethConnector's error channel", zap.Error(err))
 		case <-ticker.C:
 
+			// Basic liveness report and statistics
+			logger.Info("total logs processed:", zap.Int("count", countLogsProcessed))
+
+			// Prune the cache of processed receipts
 			numPrunedReceipts := int(0)
-			// Iterate over recorded transaction hashes, and clear receipts older than 10 blocks
-			// NOTE: 10 blocks is arbitrary, this could be lower or more. This is just to give a comfortable
-			// buffer to retain old transactions.
+			// Iterate over recorded transaction hashes, and clear receipts older than `pruneDelta` blocks
 			for hash, receipt := range processedTransactions {
-				if receipt.BlockNumber.Uint64() < lastBlockNumber-10 {
+				if receipt.BlockNumber.Uint64() < lastBlockNumber-pruneConfig.pruneHeightDelta {
 					numPrunedReceipts++
 					delete(processedTransactions, hash)
 				}
@@ -358,16 +368,15 @@ func runTransferVerifier(cmd *cobra.Command, args []string) {
 				continue
 			}
 
-			// Basic liveness report and statistics
 			countLogsProcessed += int(numProcessed)
-			// TODO fix with a total count and a trigger
-			if countLogsProcessed%livenessInterval == 0 {
-				logger.Info("total logs processed:", zap.Int("count", countLogsProcessed))
-			}
 		}
 	}
 }
 
+// denormalize() scales an amount to its native decimal representation by multiplying it by some power of 10.
+// See also:
+// - documentation: https://github.com/wormhole-foundation/wormhole/blob/main/whitepapers/0003_token_bridge.md#handling-of-token-amounts-and-decimals
+// - solidity implementation: https://github.com/wormhole-foundation/wormhole/blob/91ec4d1dc01f8b690f0492815407505fb4587520/ethereum/contracts/bridge/Bridge.sol#L295-L300
 func denormalize(
 	amount *big.Int,
 	decimals uint8,
@@ -414,6 +423,9 @@ func getDecimals(
 	}
 
 	// TODO: find out if there is some official documentation for why this uint8 is in the last index of the 32byte return.
+	// An ERC20 token's decimals should fit in a single byte. A call to `decimals()`
+	// returns a uint8 value encoded in string with 32-bytes. To get the decimals,
+	// we grab the last byte, expecting all the preceding bytes to be equal to 0.
 	decimals = result[31]
 
 	// Add the decimal value to the cache
@@ -426,6 +438,8 @@ func getDecimals(
 	return decimals, nil
 }
 
+// unwrapIfWrapped() returns the "unwrapped" address for a token a.k.a. the OriginAddress
+// of the token's original minting contract.
 func unwrapIfWrapped(
 	tokenAddress []byte,
 	tokenChain uint16,
@@ -446,8 +460,8 @@ func unwrapIfWrapped(
 	// prepare eth_call data, 4-byte signature + 2x 32 byte arguments
 	calldata := make([]byte, 4+32+32)
 
-	// wrappedAsset(uint16 tokenChainId, bytes32 tokenAddress) => 0x1ff1e286
 	copy(calldata, TOKEN_BRIDGE_WRAPPED_ASSET)
+	// Add the uint16 tokenChain as the last two bytes in the first argument
 	binary.BigEndian.PutUint16(calldata[4+30:], tokenChain)
 	copy(calldata[4+32:], tokenAddress)
 
@@ -469,6 +483,10 @@ func unwrapIfWrapped(
 	return tokenAddressNative, nil
 }
 
+// processReceipt parses and verifies that a receipt for a LogMessagedPublished event does not verify a fundamental
+// invariant of Wormhole token transfers: when the core bridge reports a transfer has occurred, there must be a
+// corresponding transfer in the token bridge. This is determined by iterating through the logs of the receipt and
+// ensuring that the sum transferred into the token bridge does not exceed the sum emitted by the core bridge.
 func processReceipt(
 	receipt *types.Receipt,
 	coreBridgeAddr common.Address,
@@ -482,7 +500,9 @@ func processReceipt(
 	}
 
 	numProcessed = 0
+	// The sum of tokens transferred into the Token Bridge contract.
 	transferredIntoBridge := make(map[common.Address]*big.Int)
+	// The sum of tokens parsed from the core bridge's LogMessagePublished payload.
 	requestedOutOfBridge := make(map[common.Address]*big.Int)
 
 	for _, log := range receipt.Logs {
@@ -564,6 +584,7 @@ func processReceipt(
 			}
 
 			// Check the first byte of the payload ID, which needs to be 0x01 (Transfer) or 0x03 (TransferWithPayload)
+			// See `payload_id` field: https://wormhole.com/docs/learn/infrastructure/vaas/
 			if logMessagePublished.Payload[0] != 0x01 && logMessagePublished.Payload[0] != 0x03 {
 				continue
 			}
