@@ -24,14 +24,27 @@ func TestDenormalize(t *testing.T) {
 			expected:big.NewInt(123000), 
 		},
 		"denormalize: decimals greater than 8":  {
-			amount:big.NewInt(123000), 
+			amount: big.NewInt(123000), 
 			decimals: 12,
 			expected: big.NewInt(1230000000),
 		},
+		// NOTE: some tokens on NEAR have as many as 24 decimals so this isn't a strict limit for Wormhole
+		// overall, but should be true for EVM chains.
 		"denormalize: decimals at maximum expected size":  {
 			amount: big.NewInt(123_000_000), 
 			decimals: 18,
 			expected: big.NewInt(1_230_000_000_000_000_000),
+		},
+		// https://github.com/wormhole-foundation/wormhole/blob/main/whitepapers/0003_token_bridge.md#handling-of-token-amounts-and-decimals
+		"denormalize: whitepaper example 1": {
+			amount: big.NewInt(100000000),
+			decimals: 18,
+			expected: big.NewInt(1000000000000000000),
+		},
+		"denormalize: whitepaper example 2": {
+			amount: big.NewInt(20000),
+			decimals: 4,
+			expected: big.NewInt(20000),
 		},
 	}
 	for name, test := range tests {
