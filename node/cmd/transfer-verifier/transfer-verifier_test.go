@@ -1,10 +1,212 @@
 package transferverifier
+
 import (
-	"testing"
 	"math/big"
-	// "github.com/stretchr/testify/assert"
-	// "github.com/stretchr/testify/require"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+
+	// "github.com/ethereum/go-ethereum/accounts/abi/bind"
+	// "github.com/ethereum/go-ethereum/accounts/abi/bind/backends"
+	// transferverifier "github.com/certusone/wormhole/node/cmd/transfer-verifier"
+	"github.com/ethereum/go-ethereum/common"
+	// "github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/types"
+	// "github.com/ethereum/go-ethereum/crypto"// "github.com/stretchr/testify/require"
 )
+
+// Important addresses for testing. Arbitrary, but Ethereum mainnet values used here
+var (
+	coreBridgeAddr = common.HexToAddress("0x98f3c9e6E3fAce36bAAd05FE09d375Ef1464288B")
+	tokenBridgeAddr = common.HexToAddress("0x3ee18B2214AFF97000D974cf647E7C347E8fa585")
+	erc20Addr = common.HexToAddress("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")
+)
+
+// Sender of transactions
+var (
+	eoa = common.HexToAddress("0xbeefcafe")
+)
+
+// Typical receipt logs that can be included in various receipt test cases
+var (
+	transferLog = &types.Log {
+		Address: erc20Addr,
+		Topics:  []common.Hash{
+			// Transfer(address,address,uint256)
+			common.HexToHash(EVENTHASH_ERC20_TRANSFER),
+			// from
+			common.HexToHash("0x00"), // unused
+			// to
+			tokenBridgeAddr.Hash(),
+		},
+		// amount
+		Data:   []byte{0x01},
+	}
+
+	logMessagedPublishedLog = &types.Log {
+		Address: coreBridgeAddr,
+		Topics:  []common.Hash{
+			// LogMessagePublished(address indexed sender, uint64 sequence, uint32 nonce, bytes payload, uint8 consistencyLevel);
+			common.HexToHash(EVENTHASH_WORMHOLE_LOG_MESSAGE_PUBLISHED),
+			// sender
+			tokenBridgeAddr.Hash()	,
+		},
+		// TODO: Make sure the amount here matches with the Data field of `transferLog`
+		Data: common.Hex2Bytes(	
+			"0000000000000000000000000000000000000000000000000000000000054683" +
+			"0000000000000000000000000000000000000000000000000000000000000000" +
+			"0000000000000000000000000000000000000000000000000000000000000080" +
+			"0000000000000000000000000000000000000000000000000000000000000001" +
+			"0000000000000000000000000000000000000000000000000000000000000085" +
+			"010000000000000000000000000000000000000000000000000000000ba90d68" +
+			"30069b8857feab8184fb687f634618c035dac439dc1aeb3b5598a0f000000000" +
+			"010001ae50701d3669549b204728323f799ae131d966b05ec11198b4d00118de" +
+			"b584720001000000000000000000000000000000000000000000000000000000" +
+			"0000000000000000000000000000000000000000000000000000000000000000",
+			),
+	}
+)
+
+var (
+	validTransferReceipt = &types.Receipt{
+		Status:            types.ReceiptStatusSuccessful,
+		Logs: []*types.Log{
+			transferLog,
+			logMessagedPublishedLog,
+		},
+	}
+	// Invalid: no erc20 transfer, so amount out > amount in
+	invalidTransferReceipt = &types.Receipt{
+		Status:            types.ReceiptStatusSuccessful,
+		Logs: []*types.Log{
+			logMessagedPublishedLog,
+		},
+	}
+	// TODO: Invalid: erc20 transfer amount is less than payload amount, so amount out > amount in
+	// invalidTransferReceipt = &types.Receipt{
+	// 	Status:            types.ReceiptStatusSuccessful,
+	// 	Logs: []*types.Log{logMessagedPublishedLog},
+	// }
+)
+
+
+func TestParseERC20TransferEvent(t *testing.T) {
+	type parsedValues struct {
+		from common.Address
+		to common.Address
+		amount *big.Int
+	}
+	erc20TransferHash := common.HexToHash(EVENTHASH_ERC20_TRANSFER)
+	t.Parallel() // marks TLog as capable of running in parallel with other tests
+	tests := map[string] struct {
+		topics []common.Hash
+		data []byte
+		expected *parsedValues
+	} {
+		"well-formed": {
+			topics: []common.Hash{
+				erc20TransferHash,
+				eoa.Hash(),
+				tokenBridgeAddr.Hash(),
+			},
+			data: common.LeftPadBytes([]byte{0x01}, 32),
+			expected: &parsedValues{
+				from: eoa,
+				to: tokenBridgeAddr,
+				amount: new(big.Int).SetBytes([]byte{0x01}),
+			},
+		},
+		"data too short": {
+			topics: []common.Hash{
+				erc20TransferHash,
+				eoa.Hash(),
+				tokenBridgeAddr.Hash(),
+			},
+			// should be 32 bytes exactly
+			data: []byte{0x01},
+			expected: &parsedValues{}, // everything nil for its type
+		},
+		"wrong number of topics": {
+			// only 1 topic: should be 3
+			topics: []common.Hash{
+				erc20TransferHash,
+			},
+			data: common.LeftPadBytes([]byte{0x01}, 32),
+			expected: &parsedValues{}, // everything nil for its type
+		},
+	}
+
+	for name, test := range tests {
+		test := test // NOTE: uncomment for Go < 1.22, see /doc/faq#closures_and_goroutines
+		t.Run(name, func(t *testing.T) {
+			t.Parallel() // marks each test case as capable of running in parallel with each other 
+			t.Log(name)
+
+			from, to, amount := parseERC20TransferEvent(test.topics, test.data)
+			assert.Equal(t, test.expected.from, from)
+			assert.Equal(t, test.expected.to, to)
+			assert.Zero(t, amount.Cmp(test.expected.amount))
+		})
+    }
+}
+
+func TestParseWethDepositEvent(t *testing.T) {{
+	type parsedValues struct {
+		destination common.Address
+		amount *big.Int
+	}
+	t.Parallel() // marks TLog as capable of running in parallel with other tests
+
+	wethDepositHash := common.HexToHash(EVENTHASH_WETH_DEPOSIT)
+	tests := map[string] struct {
+		topics []common.Hash
+		data []byte
+		expected *parsedValues
+	} {
+		"well-formed": {
+			topics: []common.Hash{
+				wethDepositHash,
+				tokenBridgeAddr.Hash(),
+			},
+			data: common.LeftPadBytes([]byte{0x01}, 32),
+			expected: &parsedValues{
+				destination: tokenBridgeAddr,
+				amount: new(big.Int).SetBytes([]byte{0x01}),
+			},
+		},
+		"data too short": {
+			topics: []common.Hash{
+				wethDepositHash,
+				tokenBridgeAddr.Hash(),
+			},
+			// should be 32 bytes exactly
+			data: []byte{0x01},
+			expected: &parsedValues{}, // everything nil for its type
+		},
+		"wrong number of topics": {
+			// only 1 topic: should be 2
+			topics: []common.Hash{
+				wethDepositHash,
+			},
+			data: common.LeftPadBytes([]byte{0x01}, 32),
+			expected: &parsedValues{}, // everything nil for its type
+		},
+	}
+
+	for name, test := range tests {
+		test := test // NOTE: uncomment for Go < 1.22, see /doc/faq#closures_and_goroutines
+		t.Run(name, func(t *testing.T) {
+			t.Parallel() // marks each test case as capable of running in parallel with each other 
+			t.Log(name)
+
+			destination, amount := parseWethDepositEvent(test.topics, test.data)
+			assert.Equal(t, test.expected.destination, destination)
+			assert.Zero(t, amount.Cmp(test.expected.amount))
+		})
+    }
+}
+
+}
 
 func TestDenormalize(t *testing.T) {
 	t.Parallel() // marks TLog as capable of running in parallel with other tests

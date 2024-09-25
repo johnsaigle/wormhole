@@ -33,7 +33,7 @@ import (
 )
 
 // Event signatures
-const (
+var (
 	// LogMessagePublished(address indexed sender, uint64 sequence, uint32 nonce, bytes payload, uint8 consistencyLevel);
 	EVENTHASH_WORMHOLE_LOG_MESSAGE_PUBLISHED = "0x6eb224fb001ed210e379b335e35efe88672a8ce935d981a6896b27ffdf52a3b2"
 	// Transfer(address,address,uint256)
