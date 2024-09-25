@@ -8,7 +8,6 @@ package transferverifier
 //	improve error propogation
 
 import (
-	// "bytes"
 	"context"
 	"encoding/binary"
 	"encoding/hex"
@@ -611,22 +610,28 @@ func processReceipt(
 	}
 
 	// TODO: Using `Warn` for testing purposes. Update to Fatal? when ready to go into PR.
+	// TODO: Revisit error handling here. 
 	for tokenAddress, amountOut := range requestedOutOfBridge {
 		if _, exists := transferredIntoBridge[tokenAddress]; !exists {
 			logger.Warn("transfer-out request for tokens that were never deposited",
 				zap.String("tokenAddress", tokenAddress.String()))
-			continue
+			// TODO: Is it better to return or continue here?
+			return numProcessed, errors.New("transfer-out request for tokens that were never deposited")
+			// continue
 		}
 
 		amountIn := transferredIntoBridge[tokenAddress]
-		if amountOut.Cmp(amountIn) > 0 {
-			logger.Warn("requested amount out is larger than amount in")
-		}
 
 		logger.Debug("bridge request processed",
 			zap.String("tokenAddress", tokenAddress.String()),
 			zap.String("amountOut", amountOut.String()),
 			zap.String("amountIn", amountIn.String()))
+
+		if amountOut.Cmp(amountIn) > 0 {
+			logger.Warn("requested amount out is larger than amount in")
+			return numProcessed, errors.New("requested amount out is larger than amount in")
+		}
+
 	}
 
 	return numProcessed, nil
