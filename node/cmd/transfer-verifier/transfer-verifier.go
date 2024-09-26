@@ -2,10 +2,11 @@ package transferverifier
 
 // TODOs
 //	tests
-//	globalize tokenBridgeAddress and coreBridgeAddress
 //	fix up contexts where it makes sense
-//	make EVM selectors more pretty?
 //	improve error propogation
+
+// maybe?
+//	globalize tokenBridgeAddress and coreBridgeAddress
 
 import (
 	"context"
@@ -22,7 +23,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 
-	// "github.com/ethereum/go-ethereum/log"
 	ipfslog "github.com/ipfs/go-log/v2"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
@@ -49,9 +49,6 @@ const (
 // https://etherscan.io/token/0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2
 var WETH_ADDRESS = common.HexToAddress("c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2")
 
-// Standard ERC20 Transfer constants. Note that `_value` (amount) is not indexed.
-// event Transfer(address indexed _from, address indexed _to, uint256 _value)
-
 // The expected total number of indexed topics for an ERC20 Transfer event
 const TOPICS_COUNT_TRANSFER = 3
 
@@ -60,10 +57,6 @@ const DESTINATION_INDEX_TRANSFER = 2
 
 // The Wormhole Chain ID for the chain being monitored
 const NATIVE_CHAIN_ID = 2
-
-// WETH Deposit constants. Note that `wad` (amount) is not indexed.
-// https://etherscan.io/token/0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2#code
-//     event  Deposit(address indexed dst, uint wad);
 
 // Which index within the topics slice contains the destination for the WETH Deposit transaction
 const DESTINATION_INDEX_DEPOSIT = 1
@@ -100,6 +93,8 @@ var (
 	RPC                 *string
 	coreContract        *string
 	tokenBridgeContract *string
+	pruneHeightDelta    *uint64
+	pruneFrequency      *time.Duration
 )
 
 var TransferVerifierCmd = &cobra.Command{
@@ -138,8 +133,7 @@ func parseERC20TransferEvent(logTopics []common.Hash, logData []byte) (from comm
 	return from, to, amount
 }
 
-// TODO: maybe make this wnative or something? fine for now, since this is for the ethereum network
-func parseWethDepositEvent(logTopics []common.Hash, logData []byte) (destination common.Address, amount *big.Int) {
+func parseWNativeDepositEvent(logTopics []common.Hash, logData []byte) (destination common.Address, amount *big.Int) {
 
 	// https://etherscan.io/token/0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2#code#L29
 	// event  Deposit(address indexed dst, uint wad);
@@ -229,15 +223,17 @@ func init() {
 	RPC = TransferVerifierCmd.Flags().String("ethRPC", "ws://localhost:8545", "Ethereum RPC url")
 	coreContract = TransferVerifierCmd.Flags().String("ethContract", "", "Ethereum core bridge address for verifying VAAs (required if ethRPC is specified)")
 	tokenBridgeContract = TransferVerifierCmd.Flags().String("tokenContract", "", "token bridge contract deployed on Ethereum")
+
+	pruneHeightDelta = TransferVerifierCmd.Flags().Uint64("pruneHeightDelta", 10, "The number of blocks for which to retain transaction receipts. Defaults to 10 blocks.")
+	pruneFrequency = TransferVerifierCmd.Flags().Duration("pruneFrequency", time.Duration(1*time.Minute), "The frequency at which to prune historic transaction receipts. Defaults to 1 minute.")
 }
 
 // Note: logger.Error should be reserved only for conditions that break the invariants of the Token Bridge
 func runTransferVerifier(cmd *cobra.Command, args []string) {
 
-	// TODO: Should these be CLI parameters?
 	pruneConfig := &pruneConfig{
-		pruneHeightDelta: uint64(10),
-		pruneFrequency:   time.Duration(1 * time.Minute),
+		pruneHeightDelta: *pruneHeightDelta,
+		pruneFrequency:   *pruneFrequency,
 	}
 
 	// Setup logging
@@ -254,6 +250,7 @@ func runTransferVerifier(cmd *cobra.Command, args []string) {
 	logger.Debug("rpc connection", zap.String("url", *RPC))
 	logger.Debug("core contract", zap.String("address", *coreContract))
 	logger.Debug("token bridge contract", zap.String("address", *tokenBridgeContract))
+	logger.Debug("prune config", zap.Uint64("height delta", pruneConfig.pruneHeightDelta), zap.Duration("frequency", pruneConfig.pruneFrequency))
 
 	// Verify CLI parameters
 	if *RPC == "" || *coreContract == "" || *tokenBridgeContract == "" {
@@ -536,7 +533,7 @@ func processReceipt(
 			}
 
 			// Extract the destination and amount for the deposit
-			destination, amount := parseWethDepositEvent(log.Topics, log.Data)
+			destination, amount := parseWNativeDepositEvent(log.Topics, log.Data)
 
 			// if the amount is nil, or the destination is not the token bridge, then just continue
 			if amount == nil || destination != tokenBridgeAddr {
