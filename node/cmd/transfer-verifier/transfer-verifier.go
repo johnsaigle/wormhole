@@ -133,6 +133,7 @@ func parseERC20TransferEvent(logTopics []common.Hash, logData []byte) (from comm
 	return from, to, amount
 }
 
+// parseWNativeDepositEvent parses an event for a deposit of a wrapped version of the chain's native asset, i.e. WETH for Ethereum.
 func parseWNativeDepositEvent(logTopics []common.Hash, logData []byte) (destination common.Address, amount *big.Int) {
 
 	// https://etherscan.io/token/0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2#code#L29

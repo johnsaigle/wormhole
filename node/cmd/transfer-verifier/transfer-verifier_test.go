@@ -2,7 +2,7 @@ package transferverifier
 
 import (
 	"context"
-	"encoding/binary"
+	// "encoding/binary"
 	"math/big"
 	"testing"
 
@@ -106,7 +106,7 @@ var (
 
 type mockConnections struct {
 	logger    *zap.Logger
-	connector *connectors.EthereumBaseConnector
+	connector *connectors.Connector
 	ctx       *context.Context
 	ctxCancel context.CancelFunc
 }
@@ -118,13 +118,14 @@ func setup() *mockConnections {
 	logger := ipfslog.Logger("wormhole-transfer-verifier-tests").Desugar()
 	ipfslog.SetAllLoggers(ipfslog.LevelDebug)
 
+	var ethConnector connectors.Connector
 	ethConnector, err := connectors.NewEthereumBaseConnector(ctx, "eth", "ws://localhost:8545", coreBridgeAddr, logger)
 	if err != nil {
 		panic(err)
 	}
 	return &mockConnections{
 		logger,
-		ethConnector,
+		&ethConnector,
 		&ctx,
 		ctxCancel,
 	}
@@ -153,7 +154,7 @@ func TestProcessReceiptHappyPath(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Log(name)
 
-			numProcessed, err := processReceipt(test.receipt, coreBridgeAddr, tokenBridgeAddr, mocks.connector, mocks.logger)
+			numProcessed, err := processReceipt(test.receipt, coreBridgeAddr, tokenBridgeAddr, *mocks.connector, mocks.logger)
 			require.NoError(t, err)
 			assert.Equal(t, test.expected, numProcessed)
 		})
@@ -194,7 +195,7 @@ func TestProcessReceiptErrors(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Log(name)
 
-			numProcessed, err := processReceipt(test.receipt, coreBridgeAddr, tokenBridgeAddr, mocks.connector, mocks.logger)
+			numProcessed, err := processReceipt(test.receipt, coreBridgeAddr, tokenBridgeAddr, *mocks.connector, mocks.logger)
 			assert.Equal(t, test.expected, numProcessed)
 			require.Error(t, err)
 		})
@@ -261,7 +262,7 @@ func TestParseERC20TransferEvent(t *testing.T) {
 	}
 }
 
-func TestParseWethDepositEvent(t *testing.T) {
+func TestParseWNativeDepositEvent(t *testing.T) {
 	{
 		type parsedValues struct {
 			destination common.Address
@@ -311,7 +312,7 @@ func TestParseWethDepositEvent(t *testing.T) {
 				t.Parallel() // marks each test case as capable of running in parallel with each other
 				t.Log(name)
 
-				destination, amount := parseWethDepositEvent(test.topics, test.data)
+				destination, amount := parseWNativeDepositEvent(test.topics, test.data)
 				assert.Equal(t, test.expected.destination, destination)
 				assert.Zero(t, amount.Cmp(test.expected.amount))
 			})
