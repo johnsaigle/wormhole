@@ -148,7 +148,7 @@ func parseWNativeDepositEvent(logTopics []common.Hash, logData []byte) (destinat
 }
 
 // parseLogMessagePublishedPayload() parses the details of a transfer from a LogMessagePublished event emitted by the core contract.
-func parseLogMessagePublishedPayload(data []byte, tokenBridgeAddr common.Address, ethConnector *connectors.EthereumBaseConnector, logger *zap.Logger) (*TransferDetails, error) {
+func parseLogMessagePublishedPayload(data []byte, tokenBridgeAddr common.Address, ethConnector connectors.Connector, logger *zap.Logger) (*TransferDetails, error) {
 	t := TransferDetails{}
 
 	// TODO: improve commenting here
@@ -270,7 +270,8 @@ func runTransferVerifier(cmd *cobra.Command, args []string) {
 	ctx, ctxCancel := context.WithCancel(context.Background())
 	defer ctxCancel()
 
-	ethConnector, err := connectors.NewEthereumBaseConnector(ctx, "eth", *RPC, coreBridgeAddr, logger)
+	var ethConnector connectors.Connector
+	ethConnector, err = connectors.NewEthereumBaseConnector(ctx, "eth", *RPC, coreBridgeAddr, logger)
 	if err != nil {
 		logger.Fatal("could not create new ethereum base connector",
 			zap.Error(err))
@@ -394,7 +395,7 @@ func denormalize(
 // TODO: write tests
 func getDecimals(
 	tokenAddress common.Address,
-	ethConnector *connectors.EthereumBaseConnector,
+	ethConnector connectors.Connector,
 	logger *zap.Logger) (decimals uint8, err error) {
 	ctx := context.TODO()
 
@@ -440,7 +441,7 @@ func unwrapIfWrapped(
 	tokenAddress []byte,
 	tokenChain uint16,
 	tokenBridgeAddr common.Address,
-	ethConnector *connectors.EthereumBaseConnector,
+	ethConnector connectors.Connector,
 	logger *zap.Logger) (unwrappedTokenAddress common.Address, err error) {
 	ctx := context.TODO()
 
@@ -487,7 +488,7 @@ func processReceipt(
 	receipt *types.Receipt,
 	coreBridgeAddr common.Address,
 	tokenBridgeAddr common.Address,
-	ethConnector *connectors.EthereumBaseConnector,
+	ethConnector connectors.Connector,
 	logger *zap.Logger) (numProcessed int, err error) {
 
 	// Sanity check. Shouldn't be necessary but no harm
@@ -607,7 +608,7 @@ func processReceipt(
 	}
 
 	// TODO: Using `Warn` for testing purposes. Update to Fatal? when ready to go into PR.
-	// TODO: Revisit error handling here. 
+	// TODO: Revisit error handling here.
 	for tokenAddress, amountOut := range requestedOutOfBridge {
 		if _, exists := transferredIntoBridge[tokenAddress]; !exists {
 			logger.Warn("transfer-out request for tokens that were never deposited",
