@@ -51,7 +51,6 @@ func init() {
 	rootCmd.AddCommand(guardiand.NodeCmd)
 	rootCmd.AddCommand(spy.SpyCmd)
 	rootCmd.AddCommand(transferverifier.TransferVerifierCmd)
-	rootCmd.AddCommand(transferverifier.TransferVerifierCmdSui)
 	rootCmd.AddCommand(ccq.QueryServerCmd)
 	rootCmd.AddCommand(guardiand.KeygenCmd)
 	rootCmd.AddCommand(guardiand.AdminCmd)
