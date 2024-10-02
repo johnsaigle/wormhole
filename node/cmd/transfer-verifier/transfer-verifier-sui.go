@@ -174,8 +174,8 @@ type SuiResult struct {
 //type SuiTransactionBlockResponse {}
 
 var TransferVerifierCmdSui = &cobra.Command{
-	Use:   "transfer-verifier-sui",
-	Short: "transfer verifier-sui",
+	Use:   "sui",
+	Short: "Transfer Verifier for Sui",
 	Run:   runTransferVerifierSui,
 }
 
@@ -188,179 +188,34 @@ type FieldsData struct {
 	Timestamp        *string `json:"timestamp"`
 }
 
-// CLI args
+// Global variables
 var (
-	// envStr *string
-	suiLogLevel            string
-	suiRPC                 string
-	suiCoreContract        string
-	suiTokenBridgeEmitter  string
-	suiMoveEventType       string
-	suiTokenBridgeContract string
+	suiMoveEventType string
 )
 
-/*
-Wormhole Core Constants
-- PackageID - 0x5306f64e312b581766351c07af79c72fcb1cd25147157fdc2f8ad76de9a3fb6a
-- State Object - 0xaeab97f96cf9877fee2883315d459552b2b921edc16d7ceac6eab944dd88919c
-
-Wormhole Token Bridge Constants
-- PackageId - 0x26efee2b51c911237888e5dc6702868abca3c7ac12c53f76ef8eba0697695e3d
-- State Object - 0xc57508ee0d4595e5a8728974a4a93a787d38f339757230d441e895422c07aba9
-- Emitter ID - ccceeb29348f71bdd22ffef43a2a19c1f5b5e17c5cca5411529120182672ade5
-	- https://github.com/wormhole-foundation/wormhole/blob/91ec4d1dc01f8b690f0492815407505fb4587520/sdk/mainnet_consts.go#L124
-
-TokenRegistry Objects:
-- USDC - https://suiscan.xyz/mainnet/object/0xf8f80c0d569fb076adb5fdc3a717dcb9ac14f7fd7512dc17efbf0f80a8b7fa8a
-- wBTC
-- Sui - https://suiscan.xyz/mainnet/object/0x831c45a8d512c9cf46e7a8a947f7cbbb5e0a59829aa72450ff26fb1873fd0e94
-
-Function pattern for testability
-- Function that gets RPC data for listening for events. Passes this information to function.
-- Function that processs an individual event. Makes it possible to add in our own data for it.
-
-Strategy:
-- Get full transaction from hash.
-- Find all events for postMessage. Parse out all of the tokens that must be processed for types and amounts.
-- From the events, find all 'tokens' that should be processed. Need to do a look up here for origin to native.
-- From the tokens, find all of the objects that were modified that are associated with the dynamic fields of the token registry.
-- Get version of object AFTER
-- Get version of object BEFORE
-- Do decimal conversions
-- Compare VAA to amount actually processed
-
-Web requests this needs:
-- Look up for TX hash (once)
-- Version lookup for BEFORE and AFTER for two requests which can be done in one using MultiGetPastObjects:
-	- Can do done in a single API call with 'https://docs.sui.io/sui-api-ref#sui_trymultigetpastobjects'.
-	- Includes the following...
-	- Native decimals
-	- Local decimals
-	- Custody amount/total supply
-	- Native token address
-
-curl --request POST \
-     --url https://rpc.ankr.com/sui/22fe735acb187df41c2e84b758d081aa48b31e69cce2dee73951b5bbfb88b403 \
-     --header 'accept: application/json' \
-     --header 'content-type: application/json' \
-     --data '{"jsonrpc":"2.0", "id": 1, "method": "sui_getTransactionBlock", "params": ["68VDcgx9YcpPkgaa3S16vdnWLhKUyFZTysQQ8RCprT1H", {"showEvents": true, "showBalanceChanges" : true}]}'
-
-Object owned by registry:
-- The 'custody' field is what we're after
-- https://suiscan.xyz/mainnet/object/0x0063d37cdce648a7c6f72f69a75a114fbcc81ef23300e4ace60c7941521163db
-
-Get previous transaction hash:
-- sui client tx-block GQPK6LoVFuUPZC6Lbf2a8MT65q8R1QhCZ65dbJHDMWoa
-
-https://stackoverflow.com/questions/77604935/request-historical-information-in-sui-api
-Get the objects previous versions:
-- sui client tx-block 7s12Zpx7J2SgKDtmNHJ5o7NzoAJ6J5WSvGdcjYeCfan2 --json | jq '.objectChanges.[] | select(.objectId == "0x027da174fa818508cbb0d421ac624f21fa419586920c4ddde5cfcf26b47201eb").previousVersion'
-
-Get object at previous version
-- sui_tryGetPastObject
-- Warning about the data getting pruned... seems to happen in an example that I just got
-- https://docs.shinami.com/reference/sui-api#sui_trygetpastobject
-
-curl --location 'https://sui-rpc.publicnode.com' \
---header 'Content-Type: application/json' \
---data '{
-  "jsonrpc": "2.0",
-  "id": 1,   "method": "sui_tryGetPastObject",
-  "params": [
-    "0xf8f80c0d569fb076adb5fdc3a717dcb9ac14f7fd7512dc17efbf0f80a8b7fa8a",
-    337699901,
-    {
-      "showPreviousTransaction": true,
-      "showContent": true
-    }
-  ]
-}' | jq
-
-
-Get a particular token (currently doesn't work?)
-curl --request POST \
-     --url https://rpc.ankr.com/sui/22fe735acb187df41c2e84b758d081aa48b31e69cce2dee73951b5bbfb88b403 \
-     --header 'accept: application/json' \
-     --header 'content-type: application/json' \
-     --data '{"jsonrpc":"2.0", "id": 1, "method": "suix_getDynamicFieldObject", "params": ["0x334881831bd89287554a6121087e498fa023ce52c037001b53a4563a00a281a5", {"type" : "0x26efee2b51c911237888e5dc6702868abca3c7ac12c53f76ef8eba0697695e3d::wrapped_asset::WrappedAsset<0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN>", "value": {"dummy_field": false}} ]}'
-
-
-
-Example
-====================
-- 155 dollar transfer out of WH of USDC
-- https://wormholescan.io/#/tx/GQPK6LoVFuUPZC6Lbf2a8MT65q8R1QhCZ65dbJHDMWoa?network=Mainnet
-
-
-Get the particular token that need. I guess there's an API for this on the token bridge - go from remote to local but I haven't tried finding this yet.
-
-Get versioning data for TX lookups. Previous in 'previousVersion' and this made 'version'.
-sui client tx-block GQPK6LoVFuUPZC6Lbf2a8MT65q8R1QhCZ65dbJHDMWoa --json | jq '.objectChanges.[] | select(.objectId == "0xf8f80c0d569fb076adb5fdc3a717dcb9ac14f7fd7512dc17efbf0f80a8b7fa8a")'
-
-TotalSupply after:
-curl --location 'https://sui-rpc.publicnode.com' \
---header 'Content-Type: application/json' \
---data '{
-  "jsonrpc": "2.0",
-  "id": 1,   "method": "sui_tryGetPastObject",
-  "params": [
-    "0xf8f80c0d569fb076adb5fdc3a717dcb9ac14f7fd7512dc17efbf0f80a8b7fa8a",
-   337700277,
-    {
-      "showPreviousTransaction": true,
-      "showContent": true
-    }
-  ]
-}' | jq .result.details.content.fields.value.fields.treasury_cap.fields.total_supply.fields.value --raw-output
-262304572736734
-
-TotalSupply before:
-url --location 'https://sui-rpc.publicnode.com' \
---header 'Content-Type: application/json' \
---data '{
-  "jsonrpc": "2.0",
-  "id": 1,   "method": "sui_tryGetPastObject",
-  "params": [
-    "0xf8f80c0d569fb076adb5fdc3a717dcb9ac14f7fd7512dc17efbf0f80a8b7fa8a",
-    337699901,
-    {
-      "showPreviousTransaction": true,
-      "showContent": true
-    }
-  ]
-}' | jq .result.details.content.fields.value.fields.treasury_cap.fields.total_supply.fields.value --raw-output
-262304728415336
-
-262304728415336 - 262304572736734 = 155678602 (difference in value that we can allow)
-
-
-Hash test cases:
-- Missing version information:
-	- 8DuaQgvkPJJyhDojYRb5wFcFUFk3DpM2V2KnYq6UcZeF
-	- 73e9s6BxJnMCSHeA6nE367z2mUYP25cVicq7hNpKcgTV
--
-*/
+// CLI args
+var (
+	suiRPC                 *string
+	suiCoreContract        *string
+	suiTokenBridgeEmitter  *string
+	suiTokenBridgeContract *string
+)
 
 // CLI parameters
 func init() {
-	// envStr = TransferVerifierCmd.Flags().String("env", "", `environment (may be "testnet" or "mainnet")`)
-
-	// TODO - fix the flag handling
-	suiRPC = *TransferVerifierCmdSui.Flags().String("suiRPC", "<RPC HERE>", "Sui RPC url")
-	logLevel = TransferVerifierCmdSui.Flags().String("logLevel", "info", "Logging level (debug, info, warn, error, dpanic, panic, fatal)")
-	suiCoreContract = *TransferVerifierCmdSui.Flags().String("suiCoreContract", "0x5306f64e312b581766351c07af79c72fcb1cd25147157fdc2f8ad76de9a3fb6a", "Event to listen to in Sui")
-	suiTokenBridgeEmitter = *TransferVerifierCmdSui.Flags().String("suiTokenBridgeEmitter", "0xccceeb29348f71bdd22ffef43a2a19c1f5b5e17c5cca5411529120182672ade5", "Token bridge emitter on Sui. Tied to the token bridge package.")
-	suiTokenBridgeContract = *TransferVerifierCmdSui.Flags().String("suiTokenBridgeContract", "0x26efee2b51c911237888e5dc6702868abca3c7ac12c53f76ef8eba0697695e3d", "Token bridge emitter on Sui. Tied to the token bridge package.")
+	suiRPC = TransferVerifierCmdSui.Flags().String("suiRPC", "", "Sui RPC url")
+	suiCoreContract = TransferVerifierCmdSui.Flags().String("suiCoreContract", "", "Event to listen to in Sui")
+	suiTokenBridgeEmitter = TransferVerifierCmdSui.Flags().String("suiTokenBridgeEmitter", "", "Token bridge emitter on Sui")
+	suiTokenBridgeContract = TransferVerifierCmdSui.Flags().String("suiTokenBridgeContract", "", "Token bridge contract on Sui")
 
 	suiMoveEventType = fmt.Sprintf("%s::publish_message::WormholeMessage", suiCoreContract)
-
 }
 
 // Note: logger.Error should be reserved only for conditions that break the invariants of the Token Bridge
 func runTransferVerifierSui(cmd *cobra.Command, args []string) {
 
 	// Setup logging
-	lvl, err := ipfslog.LevelFromString("info") // TODO - use *logLevel* for this
+	lvl, err := ipfslog.LevelFromString(*logLevel)
 	if err != nil {
 		fmt.Println("Invalid log level")
 		os.Exit(1)
@@ -369,19 +224,50 @@ func runTransferVerifierSui(cmd *cobra.Command, args []string) {
 	logger := ipfslog.Logger("wormhole-transfer-verifier-sui").Desugar()
 
 	ipfslog.SetAllLoggers(lvl)
-	logger.Info("Starting transfer verifier")
-	logger.Debug("rpc connection", zap.String("url", suiRPC))
-	logger.Debug("Sui core contract", zap.String("address", suiCoreContract))
-	logger.Debug("Sui Token bridge contract", zap.String("address", suiTokenBridgeContract))
-	logger.Debug("Token Bridge Event Emitter", zap.String("object ID", suiTokenBridgeEmitter))
+	logger.Info("Starting Sui transfer verifier")
+	logger.Debug("Sui rpc connection", zap.String("url", *suiRPC))
+	logger.Debug("Sui core contract", zap.String("address", *suiCoreContract))
+	logger.Debug("Sui token bridge contract", zap.String("address", *suiTokenBridgeContract))
+	logger.Debug("token bridge event emitter", zap.String("object id", *suiTokenBridgeEmitter))
+
+	// Verify CLI parameters
+	if *suiRPC == "" || *suiCoreContract == "" || *suiTokenBridgeEmitter == "" || *suiTokenBridgeContract == "" {
+		logger.Fatal("One or more CLI parameters are empty",
+			zap.String("suiRPC", *suiRPC),
+			zap.String("suiCoreContract", *suiCoreContract),
+			zap.String("suiTokenBridgeEmitter", *suiTokenBridgeEmitter),
+			zap.String("suiTokenBridgeContract", *suiTokenBridgeContract))
+	}
 
 	// Single hardcoded hash test
 	//processDigest(*logger)
 
 	// Process ALL of the incoming ones
 	//processAllEvents(*logger)
-	processEventsLive(*logger)
+	// processEventsLive(*logger)
+
+	// Ticker for live processing
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	errChan := make(chan error)
+
+	for {
+		select {
+		case e := <-errChan:
+			logger.Fatal("Error in processing", zap.Error(e))
+		case <-ticker.C:
+
+			// Fetch the latest events
+
+			// Process the events
+		}
+	}
 }
+
+// filter:
+//	descending_order = true
+//
 
 // https://github.com/wormhole-foundation/wormhole/blob/e297d96d101857f98e0fbba10168b6dc7b55d9c0/node/pkg/watchers/sui/watcher.go#L449
 func processEventsLive(logger zap.Logger) {
@@ -394,7 +280,7 @@ func processEventsLive(logger zap.Logger) {
 		queryEventsCmd := fmt.Sprintf(`{"jsonrpc":"2.0", "id": 1, "method": "suix_queryEvents", "params": [{ "MoveEventType": "%s" }, %s, %d, %t]}`,
 			suiMoveEventType, cursor, 10, true)
 
-		res, err := suiQueryEvents(suiRPC, queryEventsCmd)
+		res, err := suiQueryEvents(*suiRPC, queryEventsCmd)
 
 		if err != nil {
 			logger.Error(fmt.Sprintf("suiQueryEvents failed: %s", err))
@@ -456,7 +342,7 @@ func processAllEvents(logger zap.Logger) {
 		queryEventsCmd := fmt.Sprintf(`{"jsonrpc":"2.0", "id": 1, "method": "suix_queryEvents", "params": [{ "MoveEventType": "%s" }, %s, %d, %t]}`,
 			suiMoveEventType, cursor, 10000, true)
 
-		res, err := suiQueryEvents(suiRPC, queryEventsCmd)
+		res, err := suiQueryEvents(*suiRPC, queryEventsCmd)
 		if err != nil {
 			logger.Fatal("Sui query failed")
 		}
@@ -494,7 +380,7 @@ func processIncomingEvent(txDigest string, logger zap.Logger) error {
 	*/
 	queryPTB := fmt.Sprintf(`{"jsonrpc":"2.0", "id": 1, "method": "sui_getTransactionBlock", "params": ["%s", {"showEvents": true, "showObjectChanges" : true}]}`, txDigest)
 
-	ptbResults, err := suiTransactionBlock(suiRPC, queryPTB)
+	ptbResults, err := suiTransactionBlock(*suiRPC, queryPTB)
 	if err != nil {
 		return fmt.Errorf("cannot find PTB: %w", err)
 	}
@@ -520,7 +406,7 @@ func processIncomingEvent(txDigest string, logger zap.Logger) error {
 
 	// TODO - refactor this call to make it more testable.
 	// Ideas are passing in a function pointer for the query call and using a separate function to query the data then pass this in are part of the inputs for this
-	amountChanged := fillAmountProcesssed(changeList, suiRPC, &logger)
+	amountChanged := fillAmountProcesssed(changeList, *suiRPC, &logger)
 
 	// Compare amounts being processed
 	err = compareTransfers(amountChanged, wormholeEventData, logger)
@@ -730,7 +616,7 @@ func parseTxForCoinTypes(changes []SuiObjectChanges, logger zap.Logger) ([]SuiTo
 		// Check type ownership belongs to Wormhole Token Bridge
 		keyPackageId := strings.Split(dynamicFieldKey, "::")[0]
 		keyModule := strings.Split(dynamicFieldKey, "::")[1]
-		if keyPackageId != suiTokenBridgeContract { // Dynamic type from wrong package id
+		if keyPackageId != *suiTokenBridgeContract { // Dynamic type from wrong package id
 			logger.Debug(fmt.Sprintf("Wrong package key: %s", keyPackageId))
 			continue
 		}
@@ -756,7 +642,7 @@ func parseTxForCoinTypes(changes []SuiObjectChanges, logger zap.Logger) ([]SuiTo
 		valuePackageId := strings.Split(dynamicFieldValue, "::")[0]
 		valueModule := strings.Split(dynamicFieldValue, "::")[1]
 		valueType := strings.Split(dynamicFieldValue, "::")[2]
-		if valuePackageId != suiTokenBridgeContract { // Dynamic type from wrong package id
+		if valuePackageId != *suiTokenBridgeContract { // Dynamic type from wrong package id
 			logger.Debug(fmt.Sprintf("Wrong package value: %s, %s", valuePackageId, dynamicFieldValue))
 			continue
 		}
@@ -863,8 +749,8 @@ func parseEventsForWormhole(events []SuiResult, listenedType string, logger zap.
 			there is a sender that corresponds to the address that initiated the PTB.
 			The sender we want here is from the event output.
 		*/
-		if *fields.Sender != suiTokenBridgeEmitter {
-			logger.Debug("Sender is not token bridge emitter", zap.String("Sender", *fields.Sender), zap.String("Expected Sender", suiTokenBridgeEmitter))
+		if *fields.Sender != *suiTokenBridgeEmitter {
+			logger.Debug("Sender is not token bridge emitter", zap.String("Sender", *fields.Sender), zap.String("Expected Sender", *suiTokenBridgeEmitter))
 			continue
 		}
 
