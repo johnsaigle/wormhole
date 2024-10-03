@@ -9,6 +9,7 @@ package transferverifier
 //	globalize evmTokenBridgeAddress and evmCoreBridgeAddress
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/hex"
@@ -16,7 +17,6 @@ import (
 	"fmt"
 	"math/big"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum"
@@ -82,10 +82,78 @@ var (
 
 	// decimals() => 0x313ce567
 	ERC20_DECIMALS_SIGNATURE = []byte("\x31\x3c\xe5\x67")
-
-	evmCoreBridgeAddr  common.Address
-	evmTokenBridgeAddr common.Address
 )
+
+// TODO: Replace with common.Address.Cmp() in newer versions of geth.
+// see: https://github.com/ethereum/go-ethereum/blob/84a80216c6481efca1a761fb98827478a0589c09/common/types.go#L241-L243
+func cmp(a common.Address, other common.Address) int {
+	return bytes.Compare(a[:], other[:])
+}
+
+type TransferVerifier struct {
+	// Address of the Wormhole core contract for this chain
+	coreBridgeAddr common.Address
+	// Address of the Wormhole token bridge contract for this chain
+	tokenBridgeAddr common.Address
+	// Wrapped version of the native asset, e.g. WETH for Ethereum
+	wrappedNativeAddr common.Address
+	// Wormhole connector for wrapping contract-specific interactions
+	// ethConnector *connectors.Connector
+}
+
+// Higher level structs
+type TransferERC20 struct {
+	// The address of the token. Also equivalent to the Emitter of the event.
+	TokenAddress common.Address
+	// TokenChain   uint16
+	From   common.Address
+	To     common.Address
+	Amount *big.Int
+}
+type NativeDeposit struct {
+	// The address of the token. Also equivalent to the Emitter of the event.
+	TokenAddress common.Address
+	// TokenChain   uint16
+	Destination common.Address
+	Amount      *big.Int
+}
+
+// Sender           common.Address
+// Sequence         uint64
+// Nonce            uint32
+// Payload          []byte
+// ConsistencyLevel uint8
+// Raw              types.Log // Blockchain specific contextual infos
+type LogMessagePublished struct {
+	// Which contract emitted the event.
+	Emitter common.Address
+	// Which address sent the transaction.
+	Sender common.Address
+	// Abstraction over fields encoded in the event's Data field which in turn contains the transfer's payload.
+	TransferDetails *TransferDetails
+	// Note: these fields are non-exhaustive. Data not needed for Transfer Verification is not encoded here.
+}
+
+type TransferReceipt struct {
+	Deposits           *[]*NativeDeposit
+	Transfers          *[]*TransferERC20
+	MessagePublicatons *[]*LogMessagePublished
+}
+
+// https://wormhole.com/docs/learn/infrastructure/vaas/#payload-types
+type VAAPayloadType uint8
+
+const (
+	TransferTokens            VAAPayloadType = 1
+	TransferTokensWithPayload VAAPayloadType = 3
+)
+
+type TransferDetails struct {
+	PayloadType  VAAPayloadType
+	TokenAddress common.Address
+	TokenChain   uint16
+	Amount       *big.Int
+}
 
 // CLI args
 var (
@@ -109,12 +177,6 @@ type pruneConfig struct {
 	pruneHeightDelta uint64
 	// How often to prune the cache.
 	pruneFrequency time.Duration
-}
-
-type TransferDetails struct {
-	TokenAddress common.Address
-	TokenChain   uint16
-	Amount       *big.Int
 }
 
 func parseERC20TransferEvent(logTopics []common.Hash, logData []byte) (from common.Address, to common.Address, amount *big.Int) {
@@ -147,8 +209,8 @@ func parseWNativeDepositEvent(logTopics []common.Hash, logData []byte) (destinat
 	return destination, amount
 }
 
-// parseLogMessagePublishedPayload() parses the details of a transfer from a LogMessagePublished event emitted by the core contract.
-func parseLogMessagePublishedPayload(data []byte, ethConnector connectors.Connector, logger *zap.Logger) (*TransferDetails, error) {
+// parseLogMessagePublishedPayload() parses the details of a transfer from a LogMessagePublished event's Data field.
+func parseLogMessagePublishedPayload(data []byte, tokenBridgeAddr common.Address, ethConnector connectors.Connector, logger *zap.Logger) (*TransferDetails, error) {
 	t := TransferDetails{}
 
 	// TODO: improve commenting here
@@ -181,8 +243,11 @@ func parseLogMessagePublishedPayload(data []byte, ethConnector connectors.Connec
 	}
 
 	// Parse the amount, tokenAddress and tokenChain from the event
+	payloadType := VAAPayloadType(data[0])
 	amount := big.NewInt(0).SetBytes(data[1 : 1+32])
 	rawTokenAddress := data[33 : 33+32]
+	// TODO: can be deleted after debugging is finished
+	logger.Debug("raw token address", zap.String("address", fmt.Sprintf("%x", rawTokenAddress)))
 	tokenChain := binary.BigEndian.Uint16(data[65 : 65+2])
 
 	// Unwrap the token address if needed, but short-circuit if the chain ID for the token
@@ -191,13 +256,16 @@ func parseLogMessagePublishedPayload(data []byte, ethConnector connectors.Connec
 	if tokenChain == NATIVE_CHAIN_ID {
 		tokenAddress = common.BytesToAddress(rawTokenAddress)
 	} else {
-		unwrappedTokenAddress, err := unwrapIfWrapped(rawTokenAddress, tokenChain, ethConnector, logger)
+		unwrappedTokenAddress, err := unwrapIfWrapped(rawTokenAddress, tokenChain, tokenBridgeAddr, ethConnector, logger)
 		if err != nil {
-			logger.Fatal("a fatal error occurred when attempting to unwrap a token address")
-			return &t, err
+			return &t, errors.Join(errors.New("a fatal error occurred when attempting to unwrap a token address"), err)
 		}
 
 		tokenAddress = unwrappedTokenAddress
+	}
+
+	if cmp(tokenAddress, common.HexToAddress(ZERO_ADDRESS)) == 0 {
+		logger.Fatal("token address is zero address")
 	}
 
 	// Denormalize the token amount.
@@ -210,6 +278,7 @@ func parseLogMessagePublishedPayload(data []byte, ethConnector connectors.Connec
 	}
 	denormalizedAmount := denormalize(amount, decimals)
 
+	t.PayloadType = payloadType
 	t.Amount = new(big.Int).Set(denormalizedAmount)
 	t.TokenAddress = tokenAddress
 	t.TokenChain = tokenChain
@@ -218,6 +287,7 @@ func parseLogMessagePublishedPayload(data []byte, ethConnector connectors.Connec
 
 // CLI parameters
 func init() {
+	// default URL connection for anvil
 	evmRpc = TransferVerifierCmdEvm.Flags().String("ethRPC", "ws://localhost:8545", "Ethereum RPC url")
 	evmCoreContract = TransferVerifierCmdEvm.Flags().String("ethContract", "", "Ethereum core bridge address for verifying VAAs (required if ethRPC is specified)")
 	evmTokenBridgeContract = TransferVerifierCmdEvm.Flags().String("tokenContract", "", "token bridge contract deployed on Ethereum")
@@ -235,7 +305,9 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 	}
 
 	// Setup logging
-	lvl, err := ipfslog.LevelFromString(*logLevel)
+	// TODO change this, only for testing
+	lvl, err := ipfslog.LevelFromString("debug")
+	// lvl, err := ipfslog.LevelFromString(*logLevel)
 	if err != nil {
 		fmt.Println("Invalid log level")
 		os.Exit(1)
@@ -245,10 +317,6 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 
 	ipfslog.SetAllLoggers(lvl)
 	logger.Info("Starting EVM transfer verifier")
-	logger.Debug("EVM rpc connection", zap.String("url", *evmRpc))
-	logger.Debug("EVM core contract", zap.String("address", *evmCoreContract))
-	logger.Debug("EVM token bridge contract", zap.String("address", *evmTokenBridgeContract))
-	logger.Debug("EVM prune config", zap.Uint64("height delta", pruneConfig.pruneHeightDelta), zap.Duration("frequency", pruneConfig.pruneFrequency))
 
 	// Verify CLI parameters
 	if *evmRpc == "" || *evmCoreContract == "" || *evmTokenBridgeContract == "" {
@@ -259,20 +327,29 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 			zap.String("tokenContract", *evmTokenBridgeContract),
 		)
 	}
-	// Convert to lowercase
-	*evmCoreContract = strings.ToLower(*evmCoreContract)
-	*evmTokenBridgeContract = strings.ToLower(*evmTokenBridgeContract)
 
-	// Convert to common.Address
-	evmCoreBridgeAddr = common.HexToAddress(*evmCoreContract)
-	evmTokenBridgeAddr = common.HexToAddress(*evmTokenBridgeContract)
+	logger.Debug("EVM rpc connection", zap.String("url", *evmRpc))
+	logger.Debug("EVM core contract", zap.String("address", *evmCoreContract))
+	logger.Debug("EVM token bridge contract", zap.String("address", *evmTokenBridgeContract))
+	logger.Debug("EVM prune config", zap.Uint64("height delta", pruneConfig.pruneHeightDelta), zap.Duration("frequency", pruneConfig.pruneFrequency))
 
 	// Create the RPC connection, context, and channels
+
+	coreBridgeAddr := common.HexToAddress(*evmCoreContract)
+	tokenBridgeAddr := common.HexToAddress(*evmTokenBridgeContract)
+
+	transferVerifier := &TransferVerifier{
+		coreBridgeAddr:  coreBridgeAddr,
+		tokenBridgeAddr: tokenBridgeAddr,
+		// TODO should be a CLI parameter so that we could support other EVM chains
+		wrappedNativeAddr: WETH_ADDRESS,
+	}
+
 	ctx, ctxCancel := context.WithCancel(context.Background())
 	defer ctxCancel()
 
 	var ethConnector connectors.Connector
-	ethConnector, err = connectors.NewEthereumBaseConnector(ctx, "eth", *evmRpc, evmCoreBridgeAddr, logger)
+	ethConnector, err = connectors.NewEthereumBaseConnector(ctx, "eth", *evmRpc, coreBridgeAddr, logger)
 	if err != nil {
 		logger.Fatal("could not create new ethereum base connector",
 			zap.Error(err))
@@ -289,6 +366,8 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 	if sub == nil {
 		logger.Fatal("WatchLogMessagePublished returned nil")
 	}
+
+	logger.Debug("evm rpc subscription created", zap.String("address", coreBridgeAddr.String()))
 
 	// Counter for amount of logs processed
 	countLogsProcessed := int(0)
@@ -328,17 +407,22 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 
 			logger.Debug("detected LogMessagePublished event",
 				zap.String("txHash", vLog.Raw.TxHash.String()))
-			if vLog.Sender != evmTokenBridgeAddr {
-				logger.Debug("skip: sender is not token bridge",
-					zap.String("txHash", vLog.Raw.TxHash.String()),
-					zap.String("sender", vLog.Sender.Hex()))
-				continue
-			}
+
 
 			// record used/inspected tx hash
 			if _, exists := processedTransactions[vLog.Raw.TxHash]; exists {
 				logger.Debug("skip: transaction hash already processed",
 					zap.String("txHash", vLog.Raw.TxHash.String()))
+				continue
+			}
+
+			// This check also occurs when processing a receipt but skipping here avoids unnecessary
+			// processing.
+			if cmp(vLog.Sender, tokenBridgeAddr) != 0 {
+				logger.Debug("skip: sender is not token bridge",
+					zap.String("txHash", vLog.Raw.TxHash.String()),
+					zap.String("sender", vLog.Sender.String()),
+					zap.String("tokenBridge", tokenBridgeAddr.String()))
 				continue
 			}
 
@@ -354,8 +438,15 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 
 			// record a new lastBlockNumber
 			lastBlockNumber = receipt.BlockNumber.Uint64()
+			transferReceipt, err := transferVerifier.parseReceipt(receipt, ethConnector, logger)
+			if err != nil || transferReceipt == nil {
+				logger.Error("error when parsing receipt", zap.String("receipt hash", receipt.TxHash.String()), zap.Error(err))
+			}
 
-			numProcessed, err := processReceipt(receipt, ethConnector, logger)
+			numProcessed, err := transferVerifier.processReceipt(transferReceipt, logger)
+			if err != nil {
+				logger.Error("error when processing receipt", zap.Error(err))
+			}
 
 			if numProcessed == 0 {
 				logger.Warn("receipt logs empty for tx", zap.String("txHash", vLog.Raw.TxHash.Hex()))
@@ -393,11 +484,11 @@ func denormalize(
 	return denormalizedAmount
 }
 
-// TODO: write tests
 func getDecimals(
 	tokenAddress common.Address,
 	ethConnector connectors.Connector,
-	logger *zap.Logger) (decimals uint8, err error) {
+	logger *zap.Logger,
+) (decimals uint8, err error) {
 	ctx := context.TODO()
 
 	// First check if this token's decimals is stored in cache
@@ -416,7 +507,8 @@ func getDecimals(
 	result, err := ethConnector.Client().CallContract(ctx, ethCallMsg, nil)
 	if err != nil || len(result) < 32 {
 		logger.Fatal("failed to get decimals for token",
-			zap.String("tokenAddress", tokenAddress.String()))
+			zap.String("tokenAddress", tokenAddress.String()),
+			zap.Error(err))
 		return 0, err
 	}
 
@@ -441,6 +533,7 @@ func getDecimals(
 func unwrapIfWrapped(
 	tokenAddress []byte,
 	tokenChain uint16,
+	tokenBridgeAddr common.Address,
 	ethConnector connectors.Connector,
 	logger *zap.Logger) (unwrappedTokenAddress common.Address, err error) {
 	ctx := context.TODO()
@@ -463,146 +556,190 @@ func unwrapIfWrapped(
 	copy(calldata[4+32:], tokenAddress)
 
 	ethCallMsg := ethereum.CallMsg{
-		To:   &evmTokenBridgeAddr,
+		To:   &tokenBridgeAddr,
 		Data: calldata,
 	}
+	logger.Debug("calling wrappedAsset", zap.Uint16("tokenChain", tokenChain), zap.String("tokenAddress", fmt.Sprintf("%x", tokenAddress)))
 
 	result, err := ethConnector.Client().CallContract(ctx, ethCallMsg, nil)
 	if err != nil {
-		logger.Fatal("failed to get mapping for token",
-			zap.String("tokenAddress", tokenAddressAsKey))
-		return unwrappedTokenAddress, err
+		return common.Address{}, errors.New(fmt.Sprintf("failed to get mapping for token %s", tokenAddressAsKey))
 	}
 
 	tokenAddressNative := common.BytesToAddress(result)
 	wrappedCache[tokenAddressAsKey] = tokenAddressNative
+	if cmp(tokenAddressNative, common.HexToAddress(ZERO_ADDRESS)) == 0 {
+		return common.Address{}, errors.New("unwrapped address returned the zero address")
+	}
 
 	return tokenAddressNative, nil
 }
 
-// processReceipt parses and verifies that a receipt for a LogMessagedPublished event does not verify a fundamental
-// invariant of Wormhole token transfers: when the core bridge reports a transfer has occurred, there must be a
-// corresponding transfer in the token bridge. This is determined by iterating through the logs of the receipt and
-// ensuring that the sum transferred into the token bridge does not exceed the sum emitted by the core bridge.
-func processReceipt(
+// parseReceipt converts a go-ethereum receipt struct into a TransferReceipt. It makes use of the ethConnector to
+// parse information from the logs within the receipt. This function is mainly helpful to isolate the
+// parsing code from the verification logic, which makes the latter easier to test without needing an active
+// RPC connection.
+// This function parses only events with topics needed for Transfer Verification. Any other events will be discarded.
+// This function is not responsible for checking that the values for the various fields are relevant, only that they are well-formed.
+func (transferVerifier *TransferVerifier) parseReceipt(
 	receipt *types.Receipt,
 	ethConnector connectors.Connector,
-	logger *zap.Logger) (numProcessed int, err error) {
-
+	logger *zap.Logger,
+) (*TransferReceipt, error) {
 	// Sanity check. Shouldn't be necessary but no harm
 	if receipt.Status != 1 {
-		return 0, fmt.Errorf("non-success transaction status: %d", receipt.Status)
+		logger.Fatal("non-success transaction status", zap.Uint64("status", receipt.Status))
 	}
-
-	numProcessed = 0
-	// The sum of tokens transferred into the Token Bridge contract.
-	transferredIntoBridge := make(map[common.Address]*big.Int)
-	// The sum of tokens parsed from the core bridge's LogMessagePublished payload.
-	requestedOutOfBridge := make(map[common.Address]*big.Int)
-
+	var deposits []*NativeDeposit
+	var transfers []*TransferERC20
+	var messagePublications []*LogMessagePublished
 	for _, log := range receipt.Logs {
 		switch log.Topics[0] {
 		case common.HexToHash(EVENTHASH_ERC20_TRANSFER):
-			_, to, amount := parseERC20TransferEvent(log.Topics, log.Data)
-
-			// If the amount is nil, or the destination of the transfer isn't the tokenBridge, ignore.
-			if amount == nil || to != evmTokenBridgeAddr {
-				continue
-			}
-
-			// The emitter of the log is the token address
-			tokenAddr := log.Address
-
-			// Create the new entry in transferredIntoBridge if it does not exist, otherwise just add
-			// the amount to the existing entry.
-			if _, exists := transferredIntoBridge[tokenAddr]; !exists {
-				transferredIntoBridge[tokenAddr] = new(big.Int).Set(amount)
-			} else {
-				transferredIntoBridge[tokenAddr] = new(big.Int).Add(transferredIntoBridge[tokenAddr], amount)
-			}
-
-			logger.Debug("a deposit into the token bridge was recorded",
-				zap.String("tokenAddress", tokenAddr.String()),
-				zap.String("amount", amount.String()))
-
+			from, to, amount := parseERC20TransferEvent(log.Topics, log.Data)
+			transfers = append(transfers, &TransferERC20{
+				// TokenChain: log.Address,
+				TokenAddress: log.Address,
+				From:         from,
+				To:           to,
+				Amount:       amount,
+			})
 		case common.HexToHash(EVENTHASH_WETH_DEPOSIT):
-			// If the event was not emitted by the WETH contract, ignore
-			if log.Address != WETH_ADDRESS {
-				continue
-			}
-
-			// Extract the destination and amount for the deposit
 			destination, amount := parseWNativeDepositEvent(log.Topics, log.Data)
-
-			// if the amount is nil, or the destination is not the token bridge, then just continue
-			if amount == nil || destination != evmTokenBridgeAddr {
-				continue
-			}
-
-			// Create the new entry in transferredIntoBridge if it does not exist, otherwise just add
-			// the amount to the existing entry.
-			if _, exists := transferredIntoBridge[WETH_ADDRESS]; !exists {
-				transferredIntoBridge[WETH_ADDRESS] = new(big.Int).Set(amount)
-			} else {
-				transferredIntoBridge[WETH_ADDRESS] = new(big.Int).Add(transferredIntoBridge[WETH_ADDRESS], amount)
-			}
-
-			logger.Debug("a deposit into the token bridge was recorded",
-				zap.String("tokenAddress", WETH_ADDRESS.String()),
-				zap.String("amount", amount.String()))
-
+			deposits = append(deposits, &NativeDeposit{
+				TokenAddress: log.Address,
+				Destination:  destination,
+				Amount:       amount,
+			})
 		case common.HexToHash(EVENTHASH_WORMHOLE_LOG_MESSAGE_PUBLISHED):
-			// If the core bridge did not emit the event, ignore it.
-			if log.Address != evmCoreBridgeAddr {
-				continue
-			}
-
-			// Convert the log to a LogMessagePublished event
 			logMessagePublished, err := ethConnector.ParseLogMessagePublished(*log)
 			if err != nil {
 				logger.Fatal("failed to parse LogMessagePublished event")
 			}
 
-			// If the Sender is not the token bridge, ignore it
-			if logMessagePublished.Sender != evmTokenBridgeAddr {
-				logger.Debug("skipping LogMessagePublished event because the Sender is incorrect",
-					zap.Bool("isSenderTokenBridge", logMessagePublished.Sender == evmTokenBridgeAddr))
-				continue
-			}
-
 			// If there is no payload, then there's no point in further processing.
 			// This is also somewhat suspicious, so a warning is logged.
+			// TODO: Revisit whether this should be an error. This shouldn't ever happen.
 			if len(logMessagePublished.Payload) == 0 {
 				logger.Warn("a LogMessagePayload event from the token bridge was received with a zero-sized payload",
 					zap.String("txhash", log.TxHash.String()))
 				continue
 			}
-
-			// Check the first byte of the payload ID, which needs to be 0x01 (Transfer) or 0x03 (TransferWithPayload)
-			// See `payload_id` field: https://wormhole.com/docs/learn/infrastructure/vaas/
-			if logMessagePublished.Payload[0] != 0x01 && logMessagePublished.Payload[0] != 0x03 {
+			if log.Address != transferVerifier.coreBridgeAddr {
+				// Payload parsing will fail if performed on a message emitted from another contract
+				logger.Debug("skipping LogMessagePublihsed not emitted from the core bridge",
+					zap.String("emitter", log.Address.String()))
 				continue
 			}
 
-			// Get the transfer information
-			td, _ := parseLogMessagePublishedPayload(logMessagePublished.Payload, ethConnector, logger)
-
-			if _, exists := requestedOutOfBridge[td.TokenAddress]; !exists {
-				// Initialize the big.Int if it's not yet added.
-				requestedOutOfBridge[td.TokenAddress] = new(big.Int).Set(td.Amount)
-			} else {
-				// Add the amount from the transfer to the requestedOutOfBridge mapping
-				requestedOutOfBridge[td.TokenAddress] = new(big.Int).Add(requestedOutOfBridge[td.TokenAddress], td.Amount)
+			transferDetails, err := parseLogMessagePublishedPayload(logMessagePublished.Payload, transferVerifier.tokenBridgeAddr, ethConnector, logger)
+			if err != nil {
+				return nil, err
 			}
+			messagePublications = append(messagePublications, &LogMessagePublished{
+				Emitter:         log.Address,
+				Sender:          logMessagePublished.Sender,
+				TransferDetails: transferDetails,
+			})
 
-			logger.Debug("successfully parsed a LogMessagePublished event payload",
-				zap.String("tokenAddress", td.TokenAddress.String()),
-				zap.Uint16("tokenChain", td.TokenChain),
-				zap.String("amount", td.Amount.String()))
-
-			// Increment number of processed LogMessagePublished events
-			numProcessed++
 		}
+	}
+
+	return &TransferReceipt{Deposits: &deposits, Transfers: &transfers, MessagePublicatons: &messagePublications}, nil
+}
+
+// processReceipt verifies that a receipt for a LogMessagedPublished event does not verify a fundamental
+// invariant of Wormhole token transfers: when the core bridge reports a transfer has occurred, there must be a
+// corresponding transfer in the token bridge. This is determined by iterating through the logs of the receipt and
+// ensuring that the sum transferred into the token bridge does not exceed the sum emitted by the core bridge.
+func (transferVerifier *TransferVerifier) processReceipt(
+	transferReceipt *TransferReceipt,
+	logger *zap.Logger) (numProcessed int, err error) {
+	if transferReceipt == nil {
+		logger.Warn("transfer receipt is nil. Skipping transfer verification")
+		return 0, errors.New("got nil transfer receipt")
+	}
+	if len(*transferReceipt.MessagePublicatons) == 0 {
+		logger.Warn("transfer receipt contained no LogMessagePublished events")
+		return 0, errors.New("no message publications in receipt")
+	}
+
+	// The sum of tokens transferred into the Token Bridge contract.
+	transferredIntoBridge := make(map[common.Address]*big.Int)
+	// The sum of tokens parsed from the core bridge's LogMessagePublished payload.
+	requestedOutOfBridge := make(map[common.Address]*big.Int)
+
+	for _, deposit := range *transferReceipt.Deposits {
+		// Filter for deposits into the token bridge
+		if deposit.Amount == nil {
+			logger.Debug("skipping deposit event with nil amount")
+			continue
+		}
+		if deposit.Destination != transferVerifier.tokenBridgeAddr {
+			logger.Debug("skipping deposit event with destination not equal to the token bridge",
+				zap.String("destination", deposit.Destination.String()))
+			continue
+		}
+
+		if deposit.TokenAddress != transferVerifier.wrappedNativeAddr {
+			logger.Debug("skipping deposit event not from the wrapped native asset contract",
+				zap.String("tokenAddress", deposit.TokenAddress.String()),
+				zap.String("amount", deposit.Amount.String()))
+			continue
+		}
+
+		if _, exists := transferredIntoBridge[deposit.TokenAddress]; !exists {
+			transferredIntoBridge[deposit.TokenAddress] = new(big.Int).Set(deposit.Amount)
+		} else {
+			transferredIntoBridge[deposit.TokenAddress] = new(big.Int).Add(transferredIntoBridge[deposit.TokenAddress], deposit.Amount)
+		}
+		logger.Debug("a deposit into the token bridge was recorded",
+			zap.String("tokenAddress", deposit.TokenAddress.String()),
+			zap.String("amount", deposit.Amount.String()))
+	}
+
+	for _, transfer := range *transferReceipt.Transfers {
+		// Filter for transfers into the token bridge
+		if transfer.To != transferVerifier.tokenBridgeAddr {
+			continue
+		}
+		if _, exists := transferredIntoBridge[transfer.TokenAddress]; !exists {
+			transferredIntoBridge[transfer.TokenAddress] = new(big.Int).Set(transfer.Amount)
+		} else {
+			transferredIntoBridge[transfer.TokenAddress] = new(big.Int).Add(transferredIntoBridge[transfer.TokenAddress], transfer.Amount)
+		}
+	}
+
+	for _, message := range *transferReceipt.MessagePublicatons {
+		td := message.TransferDetails
+		if message.Emitter != transferVerifier.coreBridgeAddr {
+			logger.Debug("skipping LogMessagePublished event because the emitter is not the core bridge",
+				zap.String("emitter", message.Emitter.String()))
+			continue
+		}
+		if message.Sender != transferVerifier.tokenBridgeAddr {
+			logger.Debug("skipping LogMessagePublished event because the Sender is not token bridge",
+				zap.String("sender", message.Sender.String()))
+			continue
+		}
+		if td.PayloadType != TransferTokens && td.PayloadType != TransferTokensWithPayload {
+			logger.Debug("skipping LogMessagePublished event because of Payload type",
+				zap.Int("payloadType", int(td.PayloadType)))
+			continue
+
+		}
+		if _, exists := requestedOutOfBridge[td.TokenAddress]; !exists {
+			// Initialize the big.Int if it's not yet added.
+			requestedOutOfBridge[td.TokenAddress] = new(big.Int).Set(td.Amount)
+		} else {
+			// Add the amount from the transfer to the requestedOutOfBridge mapping
+			requestedOutOfBridge[td.TokenAddress] = new(big.Int).Add(requestedOutOfBridge[td.TokenAddress], td.Amount)
+		}
+		logger.Debug("successfully parsed a LogMessagePublished event payload",
+			zap.String("tokenAddress", td.TokenAddress.String()),
+			zap.Uint16("tokenChain", td.TokenChain),
+			zap.String("amount", td.Amount.String()))
+		numProcessed++
 	}
 
 	// TODO: Using `Warn` for testing purposes. Update to Fatal? when ready to go into PR.

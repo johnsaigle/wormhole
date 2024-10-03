@@ -5,6 +5,7 @@ set -uo pipefail
 export CORE_CONTRACT="0x98f3c9e6E3fAce36bAAd05FE09d375Ef1464288B"
 # mainnet token bridge contract
 export TOKEN_BRIDGE_CONTRACT="0x3ee18B2214AFF97000D974cf647E7C347E8fa585"
+
 # export ETH_FROM="0x3ee18B2214AFF97000D974cf647E7C347E8fa585"
 export MNEMONIC="myth like bonus scare over problem client lizard pioneer submit female collect" # wormhole test account
 
