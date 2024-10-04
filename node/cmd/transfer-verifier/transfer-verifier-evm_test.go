@@ -6,30 +6,24 @@ package transferverifier
 
 import (
 	"context"
-	// "encoding/binary"
+	"fmt"
 	"math/big"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	// "github.com/uber/jaeger-client-go/log/zap"
-	ipfslog "github.com/ipfs/go-log/v2"
-	"go.uber.org/zap"
-
-	// "go.uber.org/zap/zapcore"
-	// "go.uber.org/zap/zaptest"
-	// "go.uber.org/zap/zaptest/observer"
-
-	// "github.com/ethereum/go-ethereum/accounts/abi/bind"
-	// "github.com/ethereum/go-ethereum/accounts/abi/bind/backends"
-	// transferverifier "github.com/certusone/wormhole/node/cmd/transfer-verifier"
-	"github.com/ethereum/go-ethereum/common"
-	// "github.com/ethereum/go-ethereum/core"
-	// transferverifier "github.com/certusone/wormhole/node/cmd/transfer-verifier"
+	// The following imports are needed for mocking
 	connectors "github.com/certusone/wormhole/node/pkg/watchers/evm/connectors"
-	"github.com/ethereum/go-ethereum/core/types"
-	// "github.com/ethereum/go-ethereum/crypto"// "github.com/stretchr/testify/require"
+	ethAbi "github.com/certusone/wormhole/node/pkg/watchers/evm/connectors/ethabi"
+	ethereum "github.com/ethereum/go-ethereum"
+	ethClient "github.com/ethereum/go-ethereum/ethclient"
+	ethEvent "github.com/ethereum/go-ethereum/event"
+	ethRpc "github.com/ethereum/go-ethereum/rpc"
+
+	ipfslog "github.com/ipfs/go-log/v2"
+	// "go.uber.org/zap"
 )
 
 // Important addresses for testing. Arbitrary, but Ethereum mainnet values used here
@@ -37,12 +31,8 @@ var (
 	coreBridgeAddr  = common.HexToAddress("0x98f3c9e6E3fAce36bAAd05FE09d375Ef1464288B")
 	tokenBridgeAddr = common.HexToAddress("0x3ee18B2214AFF97000D974cf647E7C347E8fa585")
 	nativeAddr      = common.HexToAddress("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2") // weth
-	erc20Addr       = common.HexToAddress("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")
-)
-
-// Sender of transactions
-var (
-	eoa = common.HexToAddress("0xbeefcafe")
+	erc20Addr       = common.HexToAddress("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48") // usdc
+	eoa             = common.HexToAddress("0xbeefcafe")
 )
 
 // Typical receipt logs that can be included in various receipt test cases
@@ -53,12 +43,11 @@ var (
 			// Transfer(address,address,uint256)
 			common.HexToHash(EVENTHASH_ERC20_TRANSFER),
 			// from
-			common.HexToHash("0x00"), // unused
+			eoa.Hash(),
 			// to
 			tokenBridgeAddr.Hash(),
 		},
 		// amount
-		// TODO this must match Data below
 		Data: common.LeftPadBytes([]byte{0x01}, 32),
 	}
 
@@ -70,26 +59,11 @@ var (
 			// sender
 			tokenBridgeAddr.Hash(),
 		},
-		// NOTE: Make sure the amount here matches with the Data field of `transferLog`
-		// TODO: This was grabbed from an arbitrary transaction on etherscan. We should change this: data
-		// could be populated by doing ABI encoding on values we want to test
-		Data: common.Hex2Bytes(
-			"0000000000000000000000000000000000000000000000000000000000054683" +
-				"0000000000000000000000000000000000000000000000000000000000000000" +
-				"0000000000000000000000000000000000000000000000000000000000000080" +
-				"0000000000000000000000000000000000000000000000000000000000000001" +
-				"0000000000000000000000000000000000000000000000000000000000000085" +
-				"010000000000000000000000000000000000000000000000000000000ba90d68" +
-				"30069b8857feab8184fb687f634618c035dac439dc1aeb3b5598a0f000000000" +
-				"010001ae50701d3669549b204728323f799ae131d966b05ec11198b4d00118de" +
-				"b584720001000000000000000000000000000000000000000000000000000000" +
-				"0000000000000000000000000000000000000000000000000000000000000000",
-		),
+		Data: receiptData(big.NewInt(1)),
 	}
 )
 
 var (
-	// TODO: this is not actually valid right now. Need to fix the logs to make them agree with each other
 	validTransferReceipt = &types.Receipt{
 		Status: types.ReceiptStatusSuccessful,
 		Logs: []*types.Log{
@@ -111,74 +85,146 @@ var (
 	// }
 )
 
+type mockTV struct {
+	TransferVerifier TransferVerifier
+}
+
+func (m mockTV) getDecimals(tokenAddress common.Address) (decimals uint8, err error) {
+	return 8, nil
+}
+func (m mockTV) unwrapIfWrapped(tokenAddress []byte, tokenChain uint16) (unwrappedTokenAddress common.Address, err error) {
+	return common.BytesToAddress(tokenAddress), nil
+}
+
+// func (m mockTV) parseLogMessagePublishedPayload(data []byte) (*TransferDetails, error) {
+// 	// panic("mock: parseLogMessagePublishedPayload")
+// 	return m.TransferVerifier.parseLogMessagePublishedPayload(data, zap.NewNop())
+// }
+
+func (m mockTV) ParseReceipt(
+	receipt *types.Receipt,
+) (*TransferReceipt, error) {
+	return m.TransferVerifier.ParseReceipt(receipt)
+}
+
+func (m mockTV) ProcessReceipt(
+	receipt *TransferReceipt,
+) (int, error) {
+	return m.TransferVerifier.ProcessReceipt(receipt)
+}
+
 type mockConnections struct {
-	transferVerifier *TransferVerifier
-	logger           *zap.Logger
-	connector        *connectors.Connector
+	transferVerifier mockTV
 	ctx              *context.Context
 	ctxCancel        context.CancelFunc
 }
 
 // Create the connections and loggers expected by the functions we are testing
 func setup() *mockConnections {
-	transferVerifier := TransferVerifier{
-		coreBridgeAddr:    coreBridgeAddr,
-		tokenBridgeAddr:   tokenBridgeAddr,
-		wrappedNativeAddr: nativeAddr,
-	}
-	ctx, ctxCancel := context.WithCancel(context.Background())
-	// logger := zap.NewNop()
 	logger := ipfslog.Logger("wormhole-transfer-verifier-tests").Desugar()
 	ipfslog.SetAllLoggers(ipfslog.LevelDebug)
+	transferVerifier := mockTV{
+		TransferVerifier: TransferVerifier{
+			coreBridgeAddr:    coreBridgeAddr,
+			tokenBridgeAddr:   tokenBridgeAddr,
+			wrappedNativeAddr: nativeAddr,
+			ethConnector:      &mockConnector{},
+			logger:            *logger,
+		},
+	}
+	ctx, ctxCancel := context.WithCancel(context.Background())
 
-	var ethConnector connectors.Connector
+	// var ethConnector connectors.Connector
 	// TODO this needs to be replaced with a mock connector
 	// Currently the tests should "work" but only if you have anvil running because they are making RPC calls
 	// ethConnector, err := connectors.NewEthereumBaseConnector(ctx, "eth", "ws://localhost:8545", coreBridgeAddr, logger)
 	// if err != nil {
 	// 	panic(err)
 	// }
+
 	return &mockConnections{
-		&transferVerifier,
-		logger,
-		&ethConnector,
+		transferVerifier,
 		&ctx,
 		ctxCancel,
 	}
 }
 
 func TestParseReceiptHappyPath(t *testing.T) {
-	t.Skip("needs a mock connector to function properly")
 	mocks := setup()
 	defer mocks.ctxCancel()
 
 	// t.Parallel() // marks TLog as capable of running in parallel with other tests
 	tests := map[string]struct {
 		receipt  *types.Receipt
-		expected int
+		expected *TransferReceipt
 	}{
 		"valid transfer receipt, single LogMessagePublished": {
 			validTransferReceipt,
-			1,
+			&TransferReceipt{
+				Deposits: &[]*NativeDeposit{},
+				Transfers: &[]*TransferERC20{
+					&TransferERC20{
+						From:         eoa,
+						To:           tokenBridgeAddr,
+						TokenAddress: erc20Addr,
+						Amount:       big.NewInt(1),
+					},
+				},
+				MessagePublicatons: &[]*LogMessagePublished{
+					&LogMessagePublished{
+						Emitter: coreBridgeAddr,
+						Sender:  tokenBridgeAddr,
+						TransferDetails: &TransferDetails{
+							PayloadType:     TransferTokens,
+							TokenAddressRaw: erc20Addr,
+							TokenChain:      2, // Wormhole ethereum chain ID
+							AmountRaw:       big.NewInt(1),
+							// Amount and OriginAddress are not populated by ParseReceipt
+							// Amount: big.NewInt(1),
+							// OriginAddress: erc20Addr,
+						},
+					},
+				},
+			},
 		},
-		// "valid transfer receipt, multiple LogMessagePublished": {
-		// 	validTransferReceipt, // TODO
-		// 	2,
-		// },
 	}
 	for name, test := range tests {
 		test := test // NOTE: uncomment for Go < 1.22, see /doc/faq#closures_and_goroutines
 		t.Run(name, func(t *testing.T) {
 			t.Log(name)
 
-			transferReceipt, err := mocks.transferVerifier.parseReceipt(test.receipt, *mocks.connector, mocks.logger)
+			transferReceipt, err := mocks.transferVerifier.ParseReceipt(test.receipt)
 			require.NoError(t, err)
-			assert.Equal(t, test.expected, transferReceipt)
+
+			// Note: the data for this test uses only a single transfer. However, if multiple transfers
+			// are used, iteration over these slices will be non-deterministic which might result in a flaky
+			// test.
+			expectedTransfers := *test.expected.Transfers
+			assert.Equal(t, len(expectedTransfers), len(*transferReceipt.Transfers))
+			for _, ret := range *transferReceipt.Transfers {
+				assert.Equal(t, ret.From, expectedTransfers[0].From)
+				assert.Equal(t, ret.To, expectedTransfers[0].To)
+				assert.Equal(t, ret.TokenAddress, expectedTransfers[0].TokenAddress)
+				assert.Zero(t, ret.Amount.Cmp(expectedTransfers[0].Amount))
+			}
+
+			expectedMessages := *test.expected.MessagePublicatons
+			assert.Equal(t, len(expectedMessages), len(*transferReceipt.MessagePublicatons))
+			for _, ret := range *transferReceipt.MessagePublicatons {
+				assert.Equal(t, ret.Sender, expectedMessages[0].Sender)
+				assert.Equal(t, ret.Emitter, expectedMessages[0].Emitter)
+				assert.Equal(t, ret.TransferDetails, expectedMessages[0].TransferDetails)
+				// Amount and OriginAddress are not populated by ParseReceipt
+				assert.Equal(t, common.BytesToAddress([]byte{0x00}), ret.TransferDetails.OriginAddress)
+				assert.Nil(t, ret.TransferDetails.Amount)
+			}
+
 		})
 	}
 }
 
 func TestParseReceiptErrors(t *testing.T) {
+	// TODO: Replace the test cases below with incorrect TransferReceipts
 	t.Skip("needs a mock connector to function properly")
 	mocks := setup()
 	defer mocks.ctxCancel()
@@ -213,7 +259,7 @@ func TestParseReceiptErrors(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Log(name)
 
-			numProcessed, err := mocks.transferVerifier.parseReceipt(test.receipt, *mocks.connector, mocks.logger)
+			numProcessed, err := mocks.transferVerifier.ParseReceipt(test.receipt)
 			assert.Equal(t, test.expected, numProcessed)
 			require.Error(t, err)
 		})
@@ -366,10 +412,12 @@ func TestProcessReceipt(t *testing.T) {
 						Emitter: coreBridgeAddr,
 						Sender:  tokenBridgeAddr,
 						TransferDetails: &TransferDetails{
-							PayloadType:  TransferTokens,
-							TokenAddress: nativeAddr,
-							TokenChain:   2,
-							Amount:       big.NewInt(123),
+							PayloadType:     TransferTokens,
+							TokenAddressRaw: nativeAddr,
+							OriginAddress:   nativeAddr,
+							TokenChain:      2,
+							AmountRaw:       big.NewInt(123),
+							Amount:          big.NewInt(123),
 						},
 					},
 				},
@@ -393,10 +441,12 @@ func TestProcessReceipt(t *testing.T) {
 						Emitter: coreBridgeAddr,
 						Sender:  tokenBridgeAddr,
 						TransferDetails: &TransferDetails{
-							PayloadType:  TransferTokens,
-							TokenAddress: erc20Addr,
-							TokenChain:   2,
-							Amount:       big.NewInt(456),
+							PayloadType:     TransferTokens,
+							TokenAddressRaw: erc20Addr,
+							OriginAddress:   erc20Addr,
+							TokenChain:      2,
+							AmountRaw:       big.NewInt(456),
+							Amount:          big.NewInt(456),
 						},
 					},
 				},
@@ -419,10 +469,12 @@ func TestProcessReceipt(t *testing.T) {
 						Emitter: coreBridgeAddr,
 						Sender:  tokenBridgeAddr,
 						TransferDetails: &TransferDetails{
-							PayloadType:  TransferTokens,
-							TokenAddress: nativeAddr,
-							TokenChain:   2,
-							Amount:       big.NewInt(321),
+							PayloadType:     TransferTokens,
+							TokenAddressRaw: nativeAddr,
+							OriginAddress:   nativeAddr,
+							TokenChain:      2,
+							AmountRaw:       big.NewInt(321),
+							Amount:          big.NewInt(321),
 						},
 					},
 				},
@@ -446,10 +498,12 @@ func TestProcessReceipt(t *testing.T) {
 						Emitter: coreBridgeAddr,
 						Sender:  tokenBridgeAddr,
 						TransferDetails: &TransferDetails{
-							PayloadType:  TransferTokens,
-							TokenAddress: erc20Addr,
-							TokenChain:   2,
-							Amount:       big.NewInt(321),
+							PayloadType:     TransferTokens,
+							TokenAddressRaw: erc20Addr,
+							OriginAddress:   erc20Addr,
+							TokenChain:      2,
+							AmountRaw:       big.NewInt(321),
+							Amount:          big.NewInt(321),
 						},
 					},
 				},
@@ -494,10 +548,12 @@ func TestProcessReceipt(t *testing.T) {
 						Emitter: coreBridgeAddr,
 						Sender:  tokenBridgeAddr,
 						TransferDetails: &TransferDetails{
-							PayloadType:  TransferTokens,
-							TokenAddress: nativeAddr,
-							TokenChain:   2,
-							Amount:       big.NewInt(11),
+							PayloadType:     TransferTokens,
+							TokenAddressRaw: nativeAddr,
+							OriginAddress:   nativeAddr,
+							TokenChain:      2,
+							AmountRaw:       big.NewInt(11),
+							Amount:          big.NewInt(11),
 						},
 					},
 				},
@@ -521,10 +577,12 @@ func TestProcessReceipt(t *testing.T) {
 						Emitter: coreBridgeAddr,
 						Sender:  tokenBridgeAddr,
 						TransferDetails: &TransferDetails{
-							PayloadType:  TransferTokens,
-							TokenAddress: nativeAddr,
-							TokenChain:   2,
-							Amount:       big.NewInt(2),
+							PayloadType:     TransferTokens,
+							TokenAddressRaw: nativeAddr,
+							OriginAddress:   nativeAddr,
+							TokenChain:      2,
+							AmountRaw:       big.NewInt(2),
+							Amount:          big.NewInt(2),
 						},
 					},
 				},
@@ -548,10 +606,12 @@ func TestProcessReceipt(t *testing.T) {
 						Emitter: coreBridgeAddr,
 						Sender:  tokenBridgeAddr,
 						TransferDetails: &TransferDetails{
-							PayloadType:  TransferTokens,
-							TokenAddress: nativeAddr,
-							TokenChain:   2,
-							Amount:       big.NewInt(2),
+							PayloadType:     TransferTokens,
+							TokenAddressRaw: nativeAddr,
+							OriginAddress:   nativeAddr,
+							TokenChain:      2,
+							AmountRaw:       big.NewInt(2),
+							Amount:          big.NewInt(2),
 						},
 					},
 				},
@@ -566,7 +626,7 @@ func TestProcessReceipt(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Log(name)
 
-			numProcessed, err := mocks.transferVerifier.processReceipt(test.transferReceipt, mocks.logger)
+			numProcessed, err := mocks.transferVerifier.ProcessReceipt(test.transferReceipt)
 			assert.Equal(t, test.expected, numProcessed)
 			// TODO this could be expanded to check for specific error messages
 			assert.Equal(t, err != nil, test.errored)
@@ -575,7 +635,6 @@ func TestProcessReceipt(t *testing.T) {
 }
 
 func TestDenormalize(t *testing.T) {
-
 	t.Parallel() // marks TLog as capable of running in parallel with other tests
 	tests := map[string]struct {
 		amount   *big.Int
@@ -633,4 +692,133 @@ func TestDenormalize(t *testing.T) {
 
 		})
 	}
+}
+
+// End of Test cases
+
+// Generate the Data portion of a LogMessagePublished receipt for use in unit tests.
+// Note that Data encompasses the Payload for a transfer as well as metadata.
+func receiptData(payloadAmount *big.Int) (data []byte) {
+	// non-payload part of the receipt and ABI metadata fields
+	seq := common.LeftPadBytes([]byte{0x00}, 32)
+	nonce := common.LeftPadBytes([]byte{0x00}, 32)
+	offset := common.LeftPadBytes([]byte{0x80}, 32)
+	consistencyLevel := common.LeftPadBytes([]byte{0x01}, 32)
+	payloadLength := common.LeftPadBytes([]byte{0x85}, 32) // 133 for transferTokens
+
+	data = append(data, seq...)
+	data = append(data, nonce...)
+	data = append(data, offset...)
+	data = append(data, consistencyLevel...)
+	data = append(data, payloadLength...)
+	data = append(data, transferTokensPayload(payloadAmount)...)
+	return data
+}
+
+// Generate the Payload portion of a LogMessagePublished receipt for use in unit tests.
+func transferTokensPayload(payloadAmount *big.Int) (data []byte) {
+	// tokenTransfer() payload format:
+	//     transfer.payloadID, uint8, size: 1
+	//     amount, uint256, size: 32
+	//     tokenAddress, bytes32: size 32
+	//     tokenChain, uint16, size 2
+	//     to, bytes32: size 32
+	//     toChain, uint16, size: 2
+	//     fee, uint256 size: size 32
+	// 1 + 32 + 32 + 2 + 32 + 2 + 32 = 133
+	// See also: https://docs.soliditylang.org/en/latest/abi-spec.html
+
+	payloadType := []byte{0x01} // transferTokens, not padded
+	amount := common.LeftPadBytes(payloadAmount.Bytes(), 32)
+	tokenAddress := common.LeftPadBytes(erc20Addr.Bytes(), 32)
+	tokenChain := common.LeftPadBytes([]byte{0x02}, 2) // Eth wormhole chain ID, uint16
+	to := common.LeftPadBytes([]byte{0xca, 0xfe}, 32)
+	toChain := common.LeftPadBytes([]byte{0x01}, 2) // Eth wormhole chain ID, uint16
+	fee := common.LeftPadBytes([]byte{0x00}, 32)    // Solana wormhole chain ID, uint16
+	data = append(data, payloadType...)
+	data = append(data, amount...)
+	data = append(data, tokenAddress...)
+	data = append(data, tokenChain...)
+	data = append(data, to...)
+	data = append(data, toChain...)
+	data = append(data, fee...)
+	return data
+}
+
+// mockConnector implements the connector interface for testing purposes.
+type mockConnector struct {
+	address common.Address
+	client  *ethClient.Client
+	// mutex           sync.Mutex
+	// headSink        chan<- *types.Header
+	sub ethEvent.Subscription
+	// err error
+	// persistentError bool
+	// blockNumbers    []uint64
+	// prevLatest      uint64
+	// prevSafe        uint64
+	// prevFinalized   uint64
+}
+
+func (e *mockConnector) Client() *ethClient.Client {
+	return e.client
+}
+
+func (e *mockConnector) NetworkName() string {
+	return "mockConnector"
+}
+
+func (e *mockConnector) ContractAddress() common.Address {
+	return e.address
+}
+
+func (e *mockConnector) GetCurrentGuardianSetIndex(ctx context.Context) (uint32, error) {
+	return 0, fmt.Errorf("not implemented")
+}
+
+func (e *mockConnector) GetGuardianSet(ctx context.Context, index uint32) (ethAbi.StructsGuardianSet, error) {
+	return ethAbi.StructsGuardianSet{}, fmt.Errorf("not implemented")
+}
+
+func (e *mockConnector) WatchLogMessagePublished(ctx context.Context, errC chan error, sink chan<- *ethAbi.AbiLogMessagePublished) (ethEvent.Subscription, error) {
+	var s ethEvent.Subscription
+	return s, fmt.Errorf("not implemented")
+}
+
+func (e *mockConnector) TransactionReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (e *mockConnector) TimeOfBlockByHash(ctx context.Context, hash common.Hash) (uint64, error) {
+	return 0, fmt.Errorf("not implemented")
+}
+
+// This function is mocked to return data for TestParseReceiptHappyPath.
+func (e *mockConnector) ParseLogMessagePublished(log types.Log) (*ethAbi.AbiLogMessagePublished, error) {
+	// Returns only a single receipt for all calls to this function. This is because ParseLogMessagePublished
+	// requires a valid connector and ethClient which requires extensive mocking beyond what's already done in
+	// this test.
+	return &ethAbi.AbiLogMessagePublished{
+		Sender:   tokenBridgeAddr,
+		Sequence: 0,
+		Nonce:    0,
+		Payload:  transferTokensPayload(big.NewInt(1)),
+		Raw:      log,
+	}, nil
+}
+
+func (e *mockConnector) SubscribeForBlocks(ctx context.Context, errC chan error, sink chan<- *connectors.NewBlock) (ethereum.Subscription, error) {
+	return e.sub, fmt.Errorf("not implemented")
+}
+
+func (e *mockConnector) RawCallContext(ctx context.Context, result interface{}, method string, args ...interface{}) error {
+	panic("method not implemented by mockConnector")
+}
+
+func (e *mockConnector) RawBatchCallContext(ctx context.Context, b []ethRpc.BatchElem) (err error) {
+	panic("method not implemented by mockConnector")
+}
+
+func (e *mockConnector) SubscribeNewHead(ctx context.Context, ch chan<- *types.Header) (ethereum.Subscription, error) {
+	return e.sub, fmt.Errorf("not implemented")
 }
