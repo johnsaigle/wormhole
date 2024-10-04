@@ -5,9 +5,6 @@ package transferverifier
 //	fix up contexts where it makes sense
 //	improve error propogation
 
-// maybe?
-//	globalize evmTokenBridgeAddress and evmCoreBridgeAddress
-
 import (
 	"bytes"
 	"context"
@@ -52,19 +49,11 @@ var WETH_ADDRESS = common.HexToAddress("c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2
 // The expected total number of indexed topics for an ERC20 Transfer event
 const TOPICS_COUNT_TRANSFER = 3
 
-// Which index within the topics slice contains the destination for the ERC20 Transfer transaction
-const DESTINATION_INDEX_TRANSFER = 2
-
 // The Wormhole Chain ID for the chain being monitored
 const NATIVE_CHAIN_ID = 2
 
-// Which index within the topics slice contains the destination for the WETH Deposit transaction
-const DESTINATION_INDEX_DEPOSIT = 1
-
 // The expected total number of indexed topics for a WETH Deposit event
 const TOPICS_COUNT_DEPOSIT = 2
-
-const EVM_FIELD_LENGTH = 32
 
 // Global variables
 var (
@@ -84,7 +73,7 @@ var (
 	ERC20_DECIMALS_SIGNATURE = []byte("\x31\x3c\xe5\x67")
 )
 
-// TODO: Replace with common.Address.Cmp() in newer versions of geth.
+// TODO: Replace with common.Address.Cmp() after updating to a newer version of geth.
 // see: https://github.com/ethereum/go-ethereum/blob/84a80216c6481efca1a761fb98827478a0589c09/common/types.go#L241-L243
 func cmp(a common.Address, other common.Address) int {
 	return bytes.Compare(a[:], other[:])
@@ -101,7 +90,7 @@ type TransferVerifier struct {
 	// ethConnector *connectors.Connector
 }
 
-// Higher level structs
+// Abstraction over an ERC20 Transfer event.
 type TransferERC20 struct {
 	// The address of the token. Also equivalent to the Emitter of the event.
 	TokenAddress common.Address
@@ -110,6 +99,8 @@ type TransferERC20 struct {
 	To     common.Address
 	Amount *big.Int
 }
+
+// Abstraction over a Deposit event for a wrapped native asset.
 type NativeDeposit struct {
 	// The address of the token. Also equivalent to the Emitter of the event.
 	TokenAddress common.Address
@@ -118,12 +109,7 @@ type NativeDeposit struct {
 	Amount      *big.Int
 }
 
-// Sender           common.Address
-// Sequence         uint64
-// Nonce            uint32
-// Payload          []byte
-// ConsistencyLevel uint8
-// Raw              types.Log // Blockchain specific contextual infos
+// Abstraction over a LogMessagePublished event emitted by the core bridge.
 type LogMessagePublished struct {
 	// Which contract emitted the event.
 	Emitter common.Address
@@ -134,9 +120,11 @@ type LogMessagePublished struct {
 	// Note: these fields are non-exhaustive. Data not needed for Transfer Verification is not encoded here.
 }
 
+// Abstraction over an EVM transaction receipt for Token Bridge transfer.
 type TransferReceipt struct {
 	Deposits           *[]*NativeDeposit
 	Transfers          *[]*TransferERC20
+	// There must be at least one LogMessagePublished for a valid receipt.
 	MessagePublicatons *[]*LogMessagePublished
 }
 
@@ -148,6 +136,7 @@ const (
 	TransferTokensWithPayload VAAPayloadType = 3
 )
 
+// Abstraction of a Token Bridge transfer payload encoded in the Data field of a LogMessagePublished event.
 type TransferDetails struct {
 	PayloadType  VAAPayloadType
 	TokenAddress common.Address
@@ -209,12 +198,27 @@ func parseWNativeDepositEvent(logTopics []common.Hash, logData []byte) (destinat
 	return destination, amount
 }
 
-// parseLogMessagePublishedPayload() parses the details of a transfer from a LogMessagePublished event's Data field.
-func parseLogMessagePublishedPayload(data []byte, tokenBridgeAddr common.Address, ethConnector connectors.Connector, logger *zap.Logger) (*TransferDetails, error) {
+// parseLogMessagePublishedPayload() parses the details of a transfer from a LogMessagePublished event's Payload field.
+func parseLogMessagePublishedPayload(
+	// Corresponds to LogMessagePublished.Payload as returned by the ABI parsing operation in the ethConnector.
+	data []byte, 
+	tokenBridgeAddr common.Address, 
+	ethConnector connectors.Connector, 
+	logger *zap.Logger,
+) (*TransferDetails, error) {
 	t := TransferDetails{}
 
-	// TODO: improve commenting here
 	// https://docs.wormhole.com/wormhole/explore-wormhole/vaa
+	// This program verifies specific events:
+	// - The event is LogMessagePublished
+	// - The event was emitted by the core bridge
+	// - The sender of the event is the token bridge
+	// When all of these are true, the ethConnector is able to parse the receipt's Data field into a Payload byte array.
+	// This function performs a second round of parsing, converting the raw bytes of the Payload into a TransferDetails
+	// instance that contains information about a Transfer.
+	// Depending on the function invoked by the original caller, the payload will be of type TransferTokens or
+	// TransferTokensWithPayload. The fields relevant for this program are identical between both payload types.
+	// Unnecessary fields (like the inner payload for TransferWithPayload) are ignored.
 
 	// struct Transfer {
 	//     uint8 payloadID;
@@ -305,9 +309,7 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 	}
 
 	// Setup logging
-	// TODO change this, only for testing
-	lvl, err := ipfslog.LevelFromString("debug")
-	// lvl, err := ipfslog.LevelFromString(*logLevel)
+	lvl, err := ipfslog.LevelFromString(*logLevel)
 	if err != nil {
 		fmt.Println("Invalid log level")
 		os.Exit(1)
