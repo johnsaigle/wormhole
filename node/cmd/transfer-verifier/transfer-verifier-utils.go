@@ -7,6 +7,12 @@ import (
 	"strings"
 )
 
+// Constants
+const (
+	MAX_DECIMALS = 8
+	KEY_FORMAT   = "%s-%d"
+)
+
 // Extracts the value at the given path from the JSON object, and casts it to
 // type T. If the path does not exist in the object, an error is returned.
 func extractFromJsonPath[T any](data json.RawMessage, path string) (T, error) {
@@ -42,6 +48,9 @@ func extractFromJsonPath[T any](data json.RawMessage, path string) (T, error) {
 // the amount is divided by 10^(decimals-8). If the amount has less than 8
 // decimals, the amount is returned as is.
 func normalize(amount *big.Int, decimals uint8) (normalizedAmount *big.Int) {
+	if amount == nil {
+		return nil
+	}
 	if decimals > MAX_DECIMALS {
 		exponent := new(big.Int).SetInt64(int64(decimals - 8))
 		multiplier := new(big.Int).Exp(new(big.Int).SetInt64(10), exponent, nil)
