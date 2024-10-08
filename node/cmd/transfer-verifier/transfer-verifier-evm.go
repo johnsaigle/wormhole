@@ -514,28 +514,6 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 	}
 }
 
-// denormalize() scales an amount to its native decimal representation by multiplying it by some power of 10.
-// See also:
-// - documentation: https://github.com/wormhole-foundation/wormhole/blob/main/whitepapers/0003_token_bridge.md#handling-of-token-amounts-and-decimals
-// - solidity implementation: https://github.com/wormhole-foundation/wormhole/blob/91ec4d1dc01f8b690f0492815407505fb4587520/ethereum/contracts/bridge/Bridge.sol#L295-L300
-func denormalize(
-	amount *big.Int,
-	decimals uint8,
-) (denormalizedAmount *big.Int) {
-	if decimals > 8 {
-		// Scale from 8 decimals to `decimals`
-		exponent := new(big.Int).SetInt64(int64(decimals - 8))
-		multiplier := new(big.Int).Exp(new(big.Int).SetInt64(10), exponent, nil)
-		denormalizedAmount = new(big.Int).Mul(amount, multiplier)
-
-	} else {
-		// No scaling necessary
-		denormalizedAmount = new(big.Int).Set(amount)
-	}
-
-	return denormalizedAmount
-}
-
 func (tv *TransferVerifier) getDecimals(
 	tokenAddress common.Address,
 ) (decimals uint8, err error) {
