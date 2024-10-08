@@ -9,11 +9,14 @@ import (
 	"strings"
 )
 
-type SuiApi interface {
-	// get events etc
-}
-
 const SUI_CHAIN_ID = 21
+
+// The SuiApi interface defines the functions that are required to interact with the Sui RPC.
+type SuiApiInterface interface {
+	QueryEvents(filter string, cursor string, limit int, descending bool) (SuiQueryEventsResponse, error)
+	GetTransactionBlock(txDigest string) (SuiGetTransactionBlockResponse, error)
+	TryMultiGetPastObjects(objectId string, version string, previousVersion string) (SuiTryMultiGetPastObjectsResponse, error)
+}
 
 // This struct defines the standard properties that get returned from the RPC.
 // It includes the ErrorMessage and Error fields as well, with a standard implementation
@@ -58,13 +61,13 @@ type SuiEvent struct {
 		TxDigest *string `json:"txDigest"`
 		EventSeq *string `json:"eventSeq"`
 	} `json:"id"`
-	PackageID         *string          `json:"packageId"`
-	TransactionModule *string          `json:"transactionModule"`
-	Sender            *string          `json:"sender"`
-	Type              *string          `json:"type"`
-	Bcs               *string          `json:"bcs"`
-	Timestamp         *string          `json:"timestampMs"`
-	Message           *WormholeMessage `json:"parsedJson"`
+	PackageID         *string `json:"packageId"`
+	TransactionModule *string `json:"transactionModule"`
+	Sender            *string `json:"sender"`
+	Type              *string `json:"type"`
+	// Bcs               *string          `json:"bcs"`
+	Timestamp *string          `json:"timestampMs"`
+	Message   *WormholeMessage `json:"parsedJson"`
 }
 
 // The response object for sui_GetTransactionBlock
