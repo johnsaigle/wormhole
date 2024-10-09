@@ -1,7 +1,7 @@
 package transferverifier
 
 // TODO:
-// - remove all `t.Skip()` calls
+// - more robust mocking of RPC return values so that we can test multiple cases
 
 import (
 	"context"
@@ -209,26 +209,12 @@ func TestParseReceiptHappyPath(t *testing.T) {
 }
 
 func TestParseReceiptErrors(t *testing.T) {
-	// TODO: Replace the test cases below with incorrect TransferReceipts
-	t.Skip("needs a mock connector to function properly")
 	mocks := setup()
 	defer mocks.ctxCancel()
 
 	tests := map[string]struct {
-		receipt  *types.Receipt
-		expected int
+		receipt *types.Receipt
 	}{
-		"only LogMessagedPublished": {
-			receipt: &types.Receipt{
-				Status: types.ReceiptStatusSuccessful,
-				Logs: []*types.Log{
-					logMessagedPublishedLog,
-				},
-			},
-			// The Log will be processed successfully and increment the counter. But the function
-			// should return an error.
-			expected: 1,
-		},
 		"wrong receipt status": {
 			receipt: &types.Receipt{
 				Status: types.ReceiptStatusFailed,
@@ -236,7 +222,12 @@ func TestParseReceiptErrors(t *testing.T) {
 					logMessagedPublishedLog,
 				},
 			},
-			expected: 0,
+		},
+		"empty logs": {
+			receipt: &types.Receipt{
+				Status: types.ReceiptStatusSuccessful,
+				Logs:   []*types.Log{},
+			},
 		},
 	}
 	for name, test := range tests {
@@ -244,9 +235,9 @@ func TestParseReceiptErrors(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Log(name)
 
-			numProcessed, err := mocks.transferVerifier.ParseReceipt(test.receipt)
-			assert.Equal(t, test.expected, numProcessed)
+			receipt, err := mocks.transferVerifier.ParseReceipt(test.receipt)
 			require.Error(t, err)
+			assert.Equal(t, TransferReceipt{}, *receipt)
 		})
 	}
 }
