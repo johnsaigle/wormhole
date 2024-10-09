@@ -15,10 +15,13 @@ import (
 	"math/big"
 	"os"
 	"time"
+	// "strings"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/wormhole-foundation/wormhole/sdk/vaa"
+	ethClient "github.com/ethereum/go-ethereum/ethclient"
 
 	ipfslog "github.com/ipfs/go-log/v2"
 	"github.com/spf13/cobra"
@@ -49,6 +52,7 @@ var WETH_ADDRESS = common.HexToAddress("c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2
 
 // The expected total number of indexed topics for an ERC20 Transfer event
 const TOPICS_COUNT_TRANSFER = 3
+
 // The expected total number of indexed topics for a WETH Deposit event
 const TOPICS_COUNT_DEPOSIT = 2
 
@@ -80,13 +84,17 @@ func cmp(a common.Address, other common.Address) int {
 	return bytes.Compare(a[:], other[:])
 }
 
-type EVMTransferVerifier interface {
-	getDecimals(tokenAddress common.Address) (decimals uint8, err error)
-	unwrapIfWrapped(tokenAddress []byte, tokenChain uint16) (unwrappedTokenAddress common.Address, err error)
-	// parseLogMessagePublishedPayload(data []byte) (*TransferDetails, error)
+type connector interface {
+	ParseLogMessagePublished(log types.Log) (*ethabi.AbiLogMessagePublished, error)
 }
 
-type TransferVerifier struct {
+type evmClient interface {
+	// getDecimals()
+	CallContract(ctx context.Context, msg ethereum.CallMsg, blockNumber *big.Int) ([]byte, error)
+}
+
+// TransferVerifier contains configuration values for verifying transfers. 
+type TransferVerifier[E evmClient, C connector] struct {
 	// Address of the Wormhole core contract for this chain
 	coreBridgeAddr common.Address
 	// Address of the Wormhole token bridge contract for this chain
@@ -94,25 +102,30 @@ type TransferVerifier struct {
 	// Wrapped version of the native asset, e.g. WETH for Ethereum
 	wrappedNativeAddr common.Address
 	// Wormhole connector for wrapping contract-specific interactions
-	ethConnector connectors.Connector
-	logger zap.Logger
+	logger       zap.Logger
+	// Corresponds to the connector interface for EVM chains
+	ethConnector C
+	// Corresponds to an ethClient from go-ethereum
+	client	     E
 }
 
 // Abstraction over an ERC20 Transfer event.
 type TransferERC20 struct {
 	// The address of the token. Also equivalent to the Emitter of the event.
 	TokenAddress common.Address
-	// TokenChain   uint16
-	From   common.Address
-	To     common.Address
-	Amount *big.Int
+	// The native chain of the token (where it was minted)
+	TokenChain vaa.ChainID
+	From       common.Address
+	To         common.Address
+	Amount     *big.Int
 }
 
 // Abstraction over a Deposit event for a wrapped native asset.
 type NativeDeposit struct {
 	// The address of the token. Also equivalent to the Emitter of the event.
 	TokenAddress common.Address
-	// TokenChain   uint16
+	// The native chain of the token (where it was minted)
+	TokenChain  vaa.ChainID
 	Destination common.Address
 	Amount      *big.Int
 }
@@ -149,7 +162,7 @@ type TransferDetails struct {
 	PayloadType VAAPayloadType
 	// Raw token address parsed from the payload. May be wrapped.
 	TokenAddressRaw common.Address
-	TokenChain      uint16
+	TokenChain      vaa.ChainID
 	// Original address of the token when minted natively. Corresponds to the "unwrapped" address in the token bridge.
 	OriginAddress common.Address
 	// Amount as sent in the raw payload
@@ -213,96 +226,26 @@ func parseWNativeDepositEvent(logTopics []common.Hash, logData []byte) (destinat
 }
 
 // parseLogMessagePublishedPayload() parses the details of a transfer from a LogMessagePublished event's Payload field.
-func (tv TransferVerifier) parseLogMessagePublishedPayload(
+func parseLogMessagePublishedPayload(
 	// Corresponds to LogMessagePublished.Payload as returned by the ABI parsing operation in the ethConnector.
 	data []byte,
 ) (*TransferDetails, error) {
 
-	// https://docs.wormhole.com/wormhole/explore-wormhole/vaa
-	// This program verifies specific events:
-	// - The event is LogMessagePublished
-	// - The event was emitted by the core bridge
-	// - The sender of the event is the token bridge
-	// When all of these are true, the ethConnector is able to parse the receipt's Data field into a Payload byte array.
-	// This function performs a second round of parsing, converting the raw bytes of the Payload into a TransferDetails
-	// instance that contains information about a Transfer.
-	// Depending on the function invoked by the original caller, the payload will be of type TransferTokens or
-	// TransferTokensWithPayload. The fields relevant for this program are identical between both payload types.
-	// Unnecessary fields (like the inner payload for TransferWithPayload) are ignored.
-
-	// struct Transfer {
-	//     uint8 payloadID;
-	//     uint256 amount;
-	//     bytes32 tokenAddress;
-	//     uint16 tokenChain;
-	//     bytes32 to;
-	//     uint16 toChain;
-	//     uint256 fee;
-	// }
-
-	// struct TransferWithPayload {
-	//     uint8 payloadID;
-	//     uint256 amount;
-	//     bytes32 tokenAddress;
-	//     uint16 tokenChain;
-	//     bytes32 to;
-	//     uint16 toChain;
-	//     bytes32 fromAddress;
-	//     bytes payload;
-	// }
-
-	// Ensure we don't panic due to index out of bounds. We're indexing up to 1 uint8, x2 32-byte fields and a uint16
-	if len(data) < 1+2*32+2 {
-		return nil, errors.New("payload data is too short")
+	// Note: vaa.DecodeTransferPayloadHdr performs validation on data, e.g. length checks.
+	hdr, err := vaa.DecodeTransferPayloadHdr(data)
+	if err != nil {
+		return nil, err
 	}
-
-	// Parse the amount, tokenAddress and tokenChain from the event
-	payloadType := VAAPayloadType(data[0])
-	amount := big.NewInt(0).SetBytes(data[1 : 1+32])
-	rawTokenAddress := data[33 : 33+32]
-	// TODO: can be deleted after debugging is finished
-	// tv.logger.Debug("raw token address", zap.String("address", fmt.Sprintf("%x", rawTokenAddress)))
-	tokenChain := binary.BigEndian.Uint16(data[65 : 65+2])
-
-	// Unwrap the token address if needed, but short-circuit if the chain ID for the token
-	// is the wormhole chain ID of the network being monitored.
-	tokenAddress := common.BytesToAddress(rawTokenAddress)
-	// tv.logger.Debug("raw token address", zap.String("address", fmt.Sprintf("%x", rawTokenAddress)))
-	// var tokenAddress common.Address
-	// if tokenChain == NATIVE_CHAIN_ID {
-	// 	tokenAddress = common.BytesToAddress(rawTokenAddress)
-	// } else {
-	// 	unwrappedTokenAddress, err := tv.unwrapIfWrapped(rawTokenAddress, tokenChain, logger)
-	// 	if err != nil {
-	// 		return &t, errors.Join(errors.New("a fatal error occurred when attempting to unwrap a token address"), err)
-	// 	}
-	//
-	// 	tokenAddress = unwrappedTokenAddress
-	// }
-	//
-	// if cmp(tokenAddress, common.HexToAddress(ZERO_ADDRESS)) == 0 {
-	// 	logger.Fatal("token address is zero address")
-	// }
-
-	// Denormalize the token amount.
-	// decimals, err := tv.getDecimals(tokenAddress, logger)
-	// if err != nil {
-	// 	logger.Fatal("a fatal error occurred when attempting to get decimals",
-	// 		zap.Error(err),
-	// 	)
-	// 	return &t, err
-	// }
-	// denormalizedAmount := denormalize(amount, decimals)
-
 	return &TransferDetails{
-		PayloadType: payloadType,
-		AmountRaw: amount,
-		TokenAddressRaw: tokenAddress,
-		TokenChain: tokenChain,
+		PayloadType:     VAAPayloadType(hdr.Type),
+		AmountRaw:       hdr.Amount,
+		TokenAddressRaw: common.BytesToAddress(hdr.OriginAddress.Bytes()),
+		TokenChain:      vaa.ChainID(hdr.OriginChain),
 		// these fields are populated by RPC calls later
-		Amount: nil,
+		Amount:        nil,
 		OriginAddress: common.Address{},
-	}, nil 
+	}, nil
+
 }
 
 // CLI parameters
@@ -316,9 +259,9 @@ func init() {
 	pruneFrequency = TransferVerifierCmdEvm.Flags().Duration("pruneFrequency", time.Duration(1*time.Minute), "The frequency at which to prune historic transaction receipts. Defaults to 1 minute.")
 }
 
-// makes requests to the token bridge and token contract to get detailed, wormhole-specific information about
+// addWormholeDetails() makes requests to the token bridge and token contract to get detailed, wormhole-specific information about
 // a transfer. Modifies parameter `details` as a side-effect
-func (tv *TransferVerifier) addWormholeDetails(details *TransferDetails) (newDetails *TransferDetails, err error) {
+func (tv *TransferVerifier[ethClient, connector]) addWormholeDetails(details *TransferDetails) (newDetails *TransferDetails, err error) {
 	decimals, err := tv.getDecimals(details.TokenAddressRaw)
 	if err != nil {
 		return newDetails, err
@@ -391,13 +334,14 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 			zap.Error(err))
 	}
 
-	transferVerifier := &TransferVerifier{
+	transferVerifier:= &TransferVerifier[*ethClient.Client, connectors.Connector]{
 		coreBridgeAddr:  common.HexToAddress(*evmCoreContract),
 		tokenBridgeAddr: common.HexToAddress(*evmTokenBridgeContract),
 		// TODO should be a CLI parameter so that we could support other EVM chains
 		wrappedNativeAddr: WETH_ADDRESS,
 		ethConnector:      ethConnector,
 		logger:            *logger,
+		client:            ethConnector.Client(),
 	}
 
 	logs := make(chan *ethabi.AbiLogMessagePublished)
@@ -514,8 +458,9 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 	}
 }
 
-func (tv *TransferVerifier) getDecimals(
+func (tv *TransferVerifier[evmClient, connector]) getDecimals(
 	tokenAddress common.Address,
+	// TODO: pass logger?
 ) (decimals uint8, err error) {
 	ctx := context.TODO()
 
@@ -532,7 +477,7 @@ func (tv *TransferVerifier) getDecimals(
 		Data: ERC20_DECIMALS_SIGNATURE,
 	}
 
-	result, err := tv.ethConnector.Client().CallContract(ctx, ethCallMsg, nil)
+	result, err := tv.client.CallContract(ctx, ethCallMsg, nil)
 	if err != nil || len(result) < 32 {
 		tv.logger.Fatal("failed to get decimals for token",
 			zap.String("tokenAddress", tokenAddress.String()),
@@ -540,27 +485,26 @@ func (tv *TransferVerifier) getDecimals(
 		return 0, err
 	}
 
-	// TODO: find out if there is some official documentation for why this uint8 is in the last index of the 32byte return.
 	// An ERC20 token's decimals should fit in a single byte. A call to `decimals()`
 	// returns a uint8 value encoded in string with 32-bytes. To get the decimals,
 	// we grab the last byte, expecting all the preceding bytes to be equal to 0.
+	// TODO: find out if there is some official documentation for why this uint8 is in the last index of the 32byte return.
 	decimals = result[31]
 
 	// Add the decimal value to the cache
+	decimalsCache[tokenAddress] = decimals
 	tv.logger.Debug("adding new token's decimals to cache",
 		zap.String("tokenAddress", tokenAddress.String()),
 		zap.Uint8("tokenDecimals", decimals))
-
-	decimalsCache[tokenAddress] = decimals
 
 	return decimals, nil
 }
 
 // unwrapIfWrapped() returns the "unwrapped" address for a token a.k.a. the OriginAddress
 // of the token's original minting contract.
-func (tv TransferVerifier) unwrapIfWrapped(
+func (tv *TransferVerifier[ethClient, connector]) unwrapIfWrapped(
 	tokenAddress []byte,
-	tokenChain uint16,
+	tokenChain vaa.ChainID,
 ) (unwrappedTokenAddress common.Address, err error) {
 	ctx := context.TODO()
 
@@ -578,16 +522,16 @@ func (tv TransferVerifier) unwrapIfWrapped(
 
 	copy(calldata, TOKEN_BRIDGE_WRAPPED_ASSET)
 	// Add the uint16 tokenChain as the last two bytes in the first argument
-	binary.BigEndian.PutUint16(calldata[4+30:], tokenChain)
+	binary.BigEndian.PutUint16(calldata[4+30:], uint16(tokenChain))
 	copy(calldata[4+32:], tokenAddress)
 
 	ethCallMsg := ethereum.CallMsg{
 		To:   &tv.tokenBridgeAddr,
 		Data: calldata,
 	}
-	tv.logger.Debug("calling wrappedAsset", zap.Uint16("tokenChain", tokenChain), zap.String("tokenAddress", fmt.Sprintf("%x", tokenAddress)))
+	tv.logger.Debug("calling wrappedAsset", zap.String("tokenChain", tokenChain.String()), zap.String("tokenAddress", fmt.Sprintf("%x", tokenAddress)))
 
-	result, err := tv.ethConnector.Client().CallContract(ctx, ethCallMsg, nil)
+	result, err := tv.client.CallContract(ctx, ethCallMsg, nil)
 	if err != nil {
 		return common.Address{}, fmt.Errorf("failed to get mapping for token %s", tokenAddressAsKey)
 	}
@@ -607,7 +551,7 @@ func (tv TransferVerifier) unwrapIfWrapped(
 // RPC connection.
 // This function parses only events with topics needed for Transfer Verification. Any other events will be discarded.
 // This function is not responsible for checking that the values for the various fields are relevant, only that they are well-formed.
-func (tv *TransferVerifier) ParseReceipt(
+func (tv *TransferVerifier[evmClient, connector]) ParseReceipt(
 	receipt *types.Receipt,
 ) (*TransferReceipt, error) {
 	// Sanity check. Shouldn't be necessary but no harm
@@ -622,8 +566,8 @@ func (tv *TransferVerifier) ParseReceipt(
 		case common.HexToHash(EVENTHASH_ERC20_TRANSFER):
 			from, to, amount := parseERC20TransferEvent(log.Topics, log.Data)
 			transfers = append(transfers, &TransferERC20{
-				// TokenChain: log.Address,
 				TokenAddress: log.Address,
+				TokenChain:   NATIVE_CHAIN_ID, // TODO is this right?
 				From:         from,
 				To:           to,
 				Amount:       amount,
@@ -632,6 +576,7 @@ func (tv *TransferVerifier) ParseReceipt(
 			destination, amount := parseWNativeDepositEvent(log.Topics, log.Data)
 			deposits = append(deposits, &NativeDeposit{
 				TokenAddress: log.Address,
+				TokenChain:   NATIVE_CHAIN_ID, // always equal to Ethereum for native deposits
 				Destination:  destination,
 				Amount:       amount,
 			})
@@ -642,10 +587,9 @@ func (tv *TransferVerifier) ParseReceipt(
 			}
 
 			// If there is no payload, then there's no point in further processing.
-			// This is also somewhat suspicious, so a warning is logged.
-			// TODO: Revisit whether this should be an error. This shouldn't ever happen.
+			// This should never happen.
 			if len(logMessagePublished.Payload) == 0 {
-				tv.logger.Warn("a LogMessagePayload event from the token bridge was received with a zero-sized payload",
+				tv.logger.Error("a LogMessagePayload event from the token bridge was received with a zero-sized payload",
 					zap.String("txhash", log.TxHash.String()))
 				continue
 			}
@@ -666,7 +610,7 @@ func (tv *TransferVerifier) ParseReceipt(
 				continue
 			}
 
-			transferDetails, err := tv.parseLogMessagePublishedPayload(logMessagePublished.Payload)
+			transferDetails, err := parseLogMessagePublishedPayload(logMessagePublished.Payload)
 			if err != nil {
 				return nil, err
 			}
@@ -686,7 +630,7 @@ func (tv *TransferVerifier) ParseReceipt(
 // invariant of Wormhole token transfers: when the core bridge reports a transfer has occurred, there must be a
 // corresponding transfer in the token bridge. This is determined by iterating through the logs of the receipt and
 // ensuring that the sum transferred into the token bridge does not exceed the sum emitted by the core bridge.
-func (tv *TransferVerifier) ProcessReceipt(
+func (tv *TransferVerifier[evmClient, connector]) ProcessReceipt(
 	transferReceipt *TransferReceipt,
 ) (numProcessed int, err error) {
 	if transferReceipt == nil {
@@ -699,9 +643,9 @@ func (tv *TransferVerifier) ProcessReceipt(
 	}
 
 	// The sum of tokens transferred into the Token Bridge contract.
-	transferredIntoBridge := make(map[common.Address]*big.Int)
+	transferredIntoBridge := make(map[string]*big.Int)
 	// The sum of tokens parsed from the core bridge's LogMessagePublished payload.
-	requestedOutOfBridge := make(map[common.Address]*big.Int)
+	requestedOutOfBridge := make(map[string]*big.Int)
 
 	for _, deposit := range *transferReceipt.Deposits {
 		// Filter for deposits into the token bridge
@@ -722,10 +666,12 @@ func (tv *TransferVerifier) ProcessReceipt(
 			continue
 		}
 
-		if _, exists := transferredIntoBridge[deposit.TokenAddress]; !exists {
-			transferredIntoBridge[deposit.TokenAddress] = new(big.Int).Set(deposit.Amount)
+		key := fmt.Sprintf(KEY_FORMAT, deposit.TokenAddress, deposit.TokenChain)
+
+		if _, exists := transferredIntoBridge[key]; !exists {
+			transferredIntoBridge[key] = new(big.Int).Set(deposit.Amount)
 		} else {
-			transferredIntoBridge[deposit.TokenAddress] = new(big.Int).Add(transferredIntoBridge[deposit.TokenAddress], deposit.Amount)
+			transferredIntoBridge[key] = new(big.Int).Add(transferredIntoBridge[key], deposit.Amount)
 		}
 		tv.logger.Debug("a deposit into the token bridge was recorded",
 			zap.String("tokenAddress", deposit.TokenAddress.String()),
@@ -737,10 +683,11 @@ func (tv *TransferVerifier) ProcessReceipt(
 		if transfer.To != tv.tokenBridgeAddr {
 			continue
 		}
-		if _, exists := transferredIntoBridge[transfer.TokenAddress]; !exists {
-			transferredIntoBridge[transfer.TokenAddress] = new(big.Int).Set(transfer.Amount)
+		key := fmt.Sprintf(KEY_FORMAT, transfer.TokenAddress, transfer.TokenChain)
+		if _, exists := transferredIntoBridge[key]; !exists {
+			transferredIntoBridge[key] = new(big.Int).Set(transfer.Amount)
 		} else {
-			transferredIntoBridge[transfer.TokenAddress] = new(big.Int).Add(transferredIntoBridge[transfer.TokenAddress], transfer.Amount)
+			transferredIntoBridge[key] = new(big.Int).Add(transferredIntoBridge[key], transfer.Amount)
 		}
 	}
 
@@ -777,35 +724,34 @@ func (tv *TransferVerifier) ProcessReceipt(
 		}
 
 		// Sum up amount requested out of bridge
-		if _, exists := requestedOutOfBridge[td.OriginAddress]; !exists {
+		key := fmt.Sprintf(KEY_FORMAT, td.OriginAddress, td.TokenChain)
+		if _, exists := requestedOutOfBridge[key]; !exists {
 			// Initialize the big.Int if it's not yet added.
-			requestedOutOfBridge[td.OriginAddress] = new(big.Int).Set(td.Amount)
+			requestedOutOfBridge[key] = new(big.Int).Set(td.Amount)
 		} else {
 			// Add the amount from the transfer to the requestedOutOfBridge mapping
-			requestedOutOfBridge[td.OriginAddress] = new(big.Int).Add(requestedOutOfBridge[td.OriginAddress], td.Amount)
+			requestedOutOfBridge[key] = new(big.Int).Add(requestedOutOfBridge[key], td.Amount)
 		}
 		tv.logger.Debug("successfully parsed a LogMessagePublished event payload",
 			zap.String("tokenAddress", td.OriginAddress.String()),
-			zap.Uint16("tokenChain", td.TokenChain),
+			zap.String("tokenChain", td.TokenChain.String()),
 			zap.String("amount", td.Amount.String()))
 		numProcessed++
 	}
 
-	// TODO: Using `Warn` for testing purposes. Update to Fatal? when ready to go into PR.
-	// TODO: Revisit error handling here.
-	for tokenAddress, amountOut := range requestedOutOfBridge {
-		if _, exists := transferredIntoBridge[tokenAddress]; !exists {
-			tv.logger.Warn("transfer-out request for tokens that were never deposited",
-				zap.String("tokenAddress", tokenAddress.String()))
+	// TODO: Revisit error handling here. Are errors enough or should we do Fatal?
+	for key, amountOut := range requestedOutOfBridge {
+		if _, exists := transferredIntoBridge[key]; !exists {
+			tv.logger.Error("transfer-out request for tokens that were never deposited",
+				zap.String("key", key))
 			// TODO: Is it better to return or continue here?
 			return numProcessed, errors.New("transfer-out request for tokens that were never deposited")
-			// continue
 		}
 
-		amountIn := transferredIntoBridge[tokenAddress]
+		amountIn := transferredIntoBridge[key]
 
 		tv.logger.Debug("bridge request processed",
-			zap.String("tokenAddress", tokenAddress.String()),
+			zap.String("key", key),
 			zap.String("amountOut", amountOut.String()),
 			zap.String("amountIn", amountIn.String()))
 
@@ -813,7 +759,6 @@ func (tv *TransferVerifier) ProcessReceipt(
 			tv.logger.Warn("requested amount out is larger than amount in")
 			return numProcessed, errors.New("requested amount out is larger than amount in")
 		}
-
 	}
 
 	return numProcessed, nil
