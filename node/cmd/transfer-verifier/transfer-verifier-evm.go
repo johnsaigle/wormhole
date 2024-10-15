@@ -127,9 +127,9 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 			// TODO should be a CLI parameter so that we could support other EVM chains
 			WrappedNativeAddr: WETH_ADDRESS,
 		},
-		ethConnector:      ethConnector,
-		logger:            *logger,
-		client:            ethConnector.Client(),
+		ethConnector: ethConnector,
+		logger:       *logger,
+		client:       ethConnector.Client(),
 	}
 
 	logs := make(chan *ethabi.AbiLogMessagePublished)
@@ -276,13 +276,13 @@ func (tv *TransferVerifier[evmClient, connector]) ParseReceipt(
 	}
 
 	var deposits []*NativeDeposit
-	var transfers []*TransferERC20
+	var transfers []*ERC20Transfer
 	var messagePublications []*LogMessagePublished
 	for _, log := range receipt.Logs {
 		switch log.Topics[0] {
 		case common.HexToHash(EVENTHASH_ERC20_TRANSFER):
 			from, to, amount := parseERC20TransferEvent(log.Topics, log.Data)
-			transfers = append(transfers, &TransferERC20{
+			transfers = append(transfers, &ERC20Transfer{
 				TokenAddress: log.Address,
 				TokenChain:   NATIVE_CHAIN_ID, // TODO is this right?
 				From:         from,
@@ -365,17 +365,24 @@ func (tv *TransferVerifier[evmClient, connector]) ProcessReceipt(
 	requestedOutOfBridge := make(map[string]*big.Int)
 
 	for _, deposit := range *transferReceipt.Deposits {
-		key, relevant, err := validate[*NativeDeposit](deposit, &tv.Addresses)
+
+		err := validate[*NativeDeposit](deposit)
 		if err != nil {
 			return numProcessed, err
 		}
+
+		key, relevant := relevant[*NativeDeposit](deposit, &tv.Addresses)
 		if !relevant {
+			tv.logger.Debug("skipping irrelevant deposit",
+				zap.String("emitter", deposit.Emitter().String()),
+			)
 			continue
 		}
 		if key == "" {
 			return numProcessed, errors.New("Couldn't get key")
 		}
-		upsert(key, &transferredIntoBridge, deposit.TransferAmount())
+
+		upsert(&transferredIntoBridge, key, deposit.TransferAmount())
 		// if deposit.Receiver != tv.tokenBridgeAddr {
 		// 	tv.logger.Debug("skipping deposit event with destination not equal to the token bridge",
 		// 		zap.String("destination", deposit.Receiver.String()))
@@ -403,12 +410,17 @@ func (tv *TransferVerifier[evmClient, connector]) ProcessReceipt(
 		// 	tv.logger.Debug("skipping transfer event with nil amount")
 		// 	continue
 		// }
-		key, relevant, err := validate[*TransferERC20](transfer, &tv.Addresses)
+		err := validate[*ERC20Transfer](transfer)
 		if err != nil {
 			return numProcessed, err
 		}
+		key, relevant := relevant[*ERC20Transfer](transfer, &tv.Addresses)
 		if !relevant {
+			tv.logger.Debug("skipping irrelevant transfer")
 			continue
+		}
+		if key == "" {
+			return numProcessed, errors.New("Couldn't get key")
 		}
 		// key := fmt.Sprintf(KEY_FORMAT, transfer.TokenAddress, transfer.TokenChain)
 		// if _, exists := transferredIntoBridge[key]; !exists {
@@ -416,20 +428,22 @@ func (tv *TransferVerifier[evmClient, connector]) ProcessReceipt(
 		// } else {
 		// 	transferredIntoBridge[key] = new(big.Int).Add(transferredIntoBridge[key], transfer.Amount)
 		// }
-		upsert(key, &transferredIntoBridge, transfer.TransferAmount())
+		upsert(&transferredIntoBridge, key, transfer.TransferAmount())
 	}
 
 	for _, message := range *transferReceipt.MessagePublicatons {
 		td := message.TransferDetails
 
-		key, relevant, err := validate[*LogMessagePublished](message, &tv.Addresses)
+		err := validate[*LogMessagePublished](message)
 		if err != nil {
 			return numProcessed, err
 		}
+		key, relevant := relevant[*ERC20Transfer](message, &tv.Addresses)
 		if !relevant {
+			tv.logger.Debug("skipping irrelevant message publication")
 			continue
 		}
-		upsert(key, &requestedOutOfBridge, message.TransferAmount())
+		upsert(&requestedOutOfBridge, key, message.TransferAmount())
 
 		// // This should have already been skipped earlier in the script, but check for it here anyway.
 		// if message.EventEmitter != tv.coreBridgeAddr {
@@ -483,7 +497,7 @@ func (tv *TransferVerifier[evmClient, connector]) ProcessReceipt(
 			tv.logger.Error("transfer-out request for tokens that were never deposited",
 				zap.String("key", key))
 			// TODO: Is it better to return or continue here?
-			return numProcessed, errors.New("transfer-out request for tokens that were never deposited")
+			return numProcessed, errors.New("invariant violated: transfer-out request for tokens that were never deposited")
 		}
 
 		amountIn := transferredIntoBridge[key]
@@ -495,7 +509,7 @@ func (tv *TransferVerifier[evmClient, connector]) ProcessReceipt(
 
 		if amountOut.Cmp(amountIn) > 0 {
 			tv.logger.Warn("requested amount out is larger than amount in")
-			return numProcessed, errors.New("requested amount out is larger than amount in")
+			return numProcessed, errors.New("invariant violated: requested amount out is larger than amount in")
 		}
 	}
 
@@ -506,7 +520,7 @@ func parseERC20TransferEvent(logTopics []common.Hash, logData []byte) (from comm
 
 	// https://github.com/OpenZeppelin/openzeppelin-contracts/blob/6e224307b44bc4bd0cb60d408844e028cfa3e485/contracts/token/ERC20/IERC20.sol#L16
 	// event Transfer(address indexed from, address indexed to, uint256 value)
-	if len(logData) != 32 || len(logTopics) != TOPICS_COUNT_TRANSFER {
+	if len(logData) != EVM_WORD_LENGTH || len(logTopics) != TOPICS_COUNT_TRANSFER {
 		return common.Address{}, common.Address{}, nil
 	}
 
@@ -522,7 +536,7 @@ func parseWNativeDepositEvent(logTopics []common.Hash, logData []byte) (destinat
 
 	// https://etherscan.io/token/0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2#code#L29
 	// event  Deposit(address indexed dst, uint wad);
-	if len(logData) != 32 || len(logTopics) != TOPICS_COUNT_DEPOSIT {
+	if len(logData) != EVM_WORD_LENGTH || len(logTopics) != TOPICS_COUNT_DEPOSIT {
 		return common.Address{}, nil
 	}
 
@@ -586,7 +600,12 @@ func (tv *TransferVerifier[ethClient, connector]) addWormholeDetails(details *Tr
 	return newDetails, nil
 }
 
-func upsert(key string, dict *map[string]*big.Int, amount *big.Int) {
+// Insert a value into a map or update it if it already exists.
+func upsert(
+	dict *map[string]*big.Int,
+	key string,
+	amount *big.Int,
+) {
 	d := *dict
 	if _, exists := d[key]; !exists {
 		d[key] = new(big.Int).Set(amount)
