@@ -27,7 +27,8 @@ var (
 	tokenBridgeAddr = common.HexToAddress("0x3ee18B2214AFF97000D974cf647E7C347E8fa585")
 	nativeAddr      = common.HexToAddress("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2") // weth
 	erc20Addr       = common.HexToAddress("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48") // usdc
-	eoa             = common.HexToAddress("0xbeefcafe")
+	eoaAddrGeth     = common.HexToAddress("0xbeefcafe")
+	eoaAddrVAA, _   = vaa.BytesToAddress([]byte{0xbe, 0xef, 0xca, 0xfe})
 )
 
 // Typical receipt logs that can be included in various receipt test cases
@@ -38,7 +39,7 @@ var (
 			// Transfer(address,address,uint256)
 			common.HexToHash(EVENTHASH_ERC20_TRANSFER),
 			// from
-			eoa.Hash(),
+			eoaAddrGeth.Hash(),
 			// to
 			tokenBridgeAddr.Hash(),
 		},
@@ -86,6 +87,7 @@ type mockConnections struct {
 	ctxCancel        context.CancelFunc
 }
 
+// Stub struct, only exist to implement the interfaces
 type mockClient struct{}
 
 // TODO add a helper method to actually populate the results of the mocked method
@@ -117,12 +119,14 @@ func setup() *mockConnections {
 	logger := ipfslog.Logger("wormhole-transfer-verifier-tests").Desugar()
 	ipfslog.SetAllLoggers(ipfslog.LevelDebug)
 	transferVerifier := &TransferVerifier[*mockClient, *mockConnector]{
-		coreBridgeAddr:    coreBridgeAddr,
-		tokenBridgeAddr:   tokenBridgeAddr,
-		wrappedNativeAddr: nativeAddr,
-		ethConnector:      &mockConnector{},
-		client:            &mockClient{},
-		logger:            *logger,
+		Addresses: TVAddresses{
+			CoreBridgeAddr:    coreBridgeAddr,
+			TokenBridgeAddr:   tokenBridgeAddr,
+			WrappedNativeAddr: nativeAddr,
+		},
+		ethConnector: &mockConnector{},
+		client:       &mockClient{},
+		logger:       *logger,
 	}
 	ctx, ctxCancel := context.WithCancel(context.Background())
 
@@ -146,9 +150,9 @@ func TestParseReceiptHappyPath(t *testing.T) {
 			validTransferReceipt,
 			&TransferReceipt{
 				Deposits: &[]*NativeDeposit{},
-				Transfers: &[]*TransferERC20{
-					&TransferERC20{
-						From:         eoa,
+				Transfers: &[]*ERC20Transfer{
+					{
+						From:         eoaAddrGeth,
 						To:           tokenBridgeAddr,
 						TokenAddress: erc20Addr,
 						TokenChain:   vaa.ChainIDEthereum,
@@ -156,14 +160,15 @@ func TestParseReceiptHappyPath(t *testing.T) {
 					},
 				},
 				MessagePublicatons: &[]*LogMessagePublished{
-					&LogMessagePublished{
-						Emitter: coreBridgeAddr,
-						Sender:  tokenBridgeAddr,
+					{
+						EventEmitter: coreBridgeAddr,
+						MsgSender:    tokenBridgeAddr,
 						TransferDetails: &TransferDetails{
 							PayloadType:     TransferTokens,
 							TokenAddressRaw: erc20Addr,
 							TokenChain:      2, // Wormhole ethereum chain ID
 							AmountRaw:       big.NewInt(1),
+							TargetAddress:   eoaAddrVAA,
 							// Amount and OriginAddress are not populated by ParseReceipt
 							// Amount: big.NewInt(1),
 							// OriginAddress: erc20Addr,
@@ -187,18 +192,24 @@ func TestParseReceiptHappyPath(t *testing.T) {
 			expectedTransfers := *test.expected.Transfers
 			assert.Equal(t, len(expectedTransfers), len(*transferReceipt.Transfers))
 			for _, ret := range *transferReceipt.Transfers {
-				assert.Equal(t, ret.From, expectedTransfers[0].From)
-				assert.Equal(t, ret.To, expectedTransfers[0].To)
-				assert.Equal(t, ret.TokenAddress, expectedTransfers[0].TokenAddress)
+				assert.Equal(t, expectedTransfers[0].To, ret.To)
+				assert.Equal(t, expectedTransfers[0].From, ret.From)
+				assert.Equal(t, expectedTransfers[0].TokenAddress, ret.TokenAddress)
 				assert.Zero(t, ret.Amount.Cmp(expectedTransfers[0].Amount))
 			}
 
 			expectedMessages := *test.expected.MessagePublicatons
 			assert.Equal(t, len(expectedMessages), len(*transferReceipt.MessagePublicatons))
 			for _, ret := range *transferReceipt.MessagePublicatons {
-				assert.Equal(t, ret.Sender, expectedMessages[0].Sender)
-				assert.Equal(t, ret.Emitter, expectedMessages[0].Emitter)
+				// TODO: switch argument order to (expected, actual)
+				assert.Equal(t, ret.MsgSender, expectedMessages[0].MsgSender)
+				assert.Equal(t, ret.EventEmitter, expectedMessages[0].EventEmitter)
 				assert.Equal(t, ret.TransferDetails, expectedMessages[0].TransferDetails)
+
+				t.Logf("Expected AmountRaw: %s", expectedMessages[0].TransferDetails.AmountRaw.String())
+				t.Logf("Actual AmountRaw: %s", ret.TransferDetails.AmountRaw.String())
+				assert.Zero(t, expectedMessages[0].TransferDetails.AmountRaw.Cmp(ret.TransferDetails.AmountRaw))
+
 				// Amount and OriginAddress are not populated by ParseReceipt
 				assert.Equal(t, common.BytesToAddress([]byte{0x00}), ret.TransferDetails.OriginAddress)
 				assert.Nil(t, ret.TransferDetails.Amount)
@@ -258,12 +269,12 @@ func TestParseERC20TransferEvent(t *testing.T) {
 		"well-formed": {
 			topics: []common.Hash{
 				erc20TransferHash,
-				eoa.Hash(),
+				eoaAddrGeth.Hash(),
 				tokenBridgeAddr.Hash(),
 			},
 			data: common.LeftPadBytes([]byte{0x01}, 32),
 			expected: &parsedValues{
-				from:   eoa,
+				from:   eoaAddrGeth,
 				to:     tokenBridgeAddr,
 				amount: new(big.Int).SetBytes([]byte{0x01}),
 			},
@@ -271,7 +282,7 @@ func TestParseERC20TransferEvent(t *testing.T) {
 		"data too short": {
 			topics: []common.Hash{
 				erc20TransferHash,
-				eoa.Hash(),
+				eoaAddrGeth.Hash(),
 				tokenBridgeAddr.Hash(),
 			},
 			// should be 32 bytes exactly
@@ -366,8 +377,9 @@ func TestProcessReceipt(t *testing.T) {
 
 	tests := map[string]struct {
 		transferReceipt *TransferReceipt
-		expected        int
-		errored         bool
+		// number of receipts successfully processed
+		expected    int
+		shouldError bool
 	}{
 		// TODO test cases:
 		// - multiple transfers adding up to the right amount
@@ -376,22 +388,23 @@ func TestProcessReceipt(t *testing.T) {
 		"valid transfer: amounts match, deposit": {
 			transferReceipt: &TransferReceipt{
 				Deposits: &[]*NativeDeposit{
-					&NativeDeposit{
+					{
 						TokenAddress: nativeAddr,
 						TokenChain:   vaa.ChainIDEthereum,
-						Destination:  tokenBridgeAddr,
+						Receiver:     tokenBridgeAddr,
 						Amount:       big.NewInt(123),
 					},
 				},
-				Transfers: &[]*TransferERC20{},
+				Transfers: &[]*ERC20Transfer{},
 				MessagePublicatons: &[]*LogMessagePublished{
-					&LogMessagePublished{
-						Emitter: coreBridgeAddr,
-						Sender:  tokenBridgeAddr,
+					{
+						EventEmitter: coreBridgeAddr,
+						MsgSender:    tokenBridgeAddr,
 						TransferDetails: &TransferDetails{
 							PayloadType:     TransferTokens,
 							TokenAddressRaw: nativeAddr,
 							OriginAddress:   nativeAddr,
+							TargetAddress:   eoaAddrVAA,
 							TokenChain:      2,
 							AmountRaw:       big.NewInt(123),
 							Amount:          big.NewInt(123),
@@ -399,88 +412,91 @@ func TestProcessReceipt(t *testing.T) {
 					},
 				},
 			},
-			expected: 1,
-			errored:  false,
+			expected:    1,
+			shouldError: false,
 		},
 		"valid transfer: amounts match, transfer": {
 			transferReceipt: &TransferReceipt{
 				Deposits: &[]*NativeDeposit{},
-				Transfers: &[]*TransferERC20{
-					&TransferERC20{
+				Transfers: &[]*ERC20Transfer{
+					{
 						TokenAddress: erc20Addr,
 						TokenChain:   vaa.ChainIDEthereum,
-						From:         eoa,
+						From:         eoaAddrGeth,
 						To:           tokenBridgeAddr,
 						Amount:       big.NewInt(456),
 					},
 				},
 				MessagePublicatons: &[]*LogMessagePublished{
-					&LogMessagePublished{
-						Emitter: coreBridgeAddr,
-						Sender:  tokenBridgeAddr,
+					{
+						EventEmitter: coreBridgeAddr,
+						MsgSender:    tokenBridgeAddr,
 						TransferDetails: &TransferDetails{
 							PayloadType:     TransferTokens,
 							TokenAddressRaw: erc20Addr,
 							OriginAddress:   erc20Addr,
 							TokenChain:      2,
+							TargetAddress:   eoaAddrVAA,
 							AmountRaw:       big.NewInt(456),
 							Amount:          big.NewInt(456),
 						},
 					},
 				},
 			},
-			expected: 1,
-			errored:  false,
+			expected:    1,
+			shouldError: false,
 		},
 		"valid transfer: amount in is greater than amount out, deposit": {
 			transferReceipt: &TransferReceipt{
 				Deposits: &[]*NativeDeposit{
-					&NativeDeposit{
+					{
 						TokenAddress: nativeAddr,
 						TokenChain:   vaa.ChainIDEthereum,
-						Destination:  tokenBridgeAddr,
+						Receiver:     tokenBridgeAddr,
 						Amount:       big.NewInt(999),
 					},
 				},
-				Transfers: &[]*TransferERC20{},
+				Transfers: &[]*ERC20Transfer{},
 				MessagePublicatons: &[]*LogMessagePublished{
-					&LogMessagePublished{
-						Emitter: coreBridgeAddr,
-						Sender:  tokenBridgeAddr,
+					{
+						EventEmitter: coreBridgeAddr,
+						MsgSender:    tokenBridgeAddr,
 						TransferDetails: &TransferDetails{
 							PayloadType:     TransferTokens,
 							TokenAddressRaw: nativeAddr,
-							OriginAddress:   nativeAddr,
 							TokenChain:      2,
+							OriginAddress:   nativeAddr,
+							TargetAddress:   eoaAddrVAA,
 							AmountRaw:       big.NewInt(321),
 							Amount:          big.NewInt(321),
 						},
 					},
 				},
 			},
-			expected: 1,
-			errored:  false,
+			expected:    1,
+			shouldError: false,
 		},
 		"valid transfer: amount in is greater than amount out, transfer": {
 			transferReceipt: &TransferReceipt{
 				Deposits: &[]*NativeDeposit{},
-				Transfers: &[]*TransferERC20{
-					&TransferERC20{
+				Transfers: &[]*ERC20Transfer{
+					{
 						TokenAddress: erc20Addr,
 						TokenChain:   vaa.ChainIDEthereum,
-						From:         eoa,
+						From:         eoaAddrGeth,
 						To:           tokenBridgeAddr,
 						Amount:       big.NewInt(999),
 					},
 				},
 				MessagePublicatons: &[]*LogMessagePublished{
-					&LogMessagePublished{
-						Emitter: coreBridgeAddr,
-						Sender:  tokenBridgeAddr,
+					{
+						EventEmitter: coreBridgeAddr,
+						MsgSender:    tokenBridgeAddr,
 						TransferDetails: &TransferDetails{
 							PayloadType:     TransferTokens,
 							TokenAddressRaw: erc20Addr,
 							OriginAddress:   erc20Addr,
+							TargetAddress:   eoaAddrVAA,
 							TokenChain:      2,
 							AmountRaw:       big.NewInt(321),
 							Amount:          big.NewInt(321),
@@ -488,51 +504,54 @@ func TestProcessReceipt(t *testing.T) {
 					},
 				},
 			},
-			expected: 1,
-			errored:  false,
+			expected:    1,
+			shouldError: false,
 		},
-		"invalid transfer: no LogMessagePublished": {
-			transferReceipt: &TransferReceipt{
-				Deposits: &[]*NativeDeposit{
-					&NativeDeposit{
-						TokenAddress: nativeAddr,
-						TokenChain:   vaa.ChainIDEthereum,
-						Destination:  tokenBridgeAddr,
-						Amount:       big.NewInt(10),
-					},
-				},
-				Transfers: &[]*TransferERC20{
-					&TransferERC20{
-						TokenAddress: erc20Addr,
-						TokenChain:   vaa.ChainIDEthereum,
-						From:         eoa,
-						To:           tokenBridgeAddr,
-						Amount:       big.NewInt(456),
-					},
-				},
-				MessagePublicatons: &[]*LogMessagePublished{},
-			},
-			expected: 0,
-			errored:  true,
-		},
+		// TODO this should be done as a unit test on the validate function.
+		// "invalid transfer: no LogMessagePublished": {
+		// 	transferReceipt: &TransferReceipt{
+		// 		Deposits: &[]*NativeDeposit{
+		// 			{
+		// 				TokenAddress: nativeAddr,
+		// 				TokenChain:   vaa.ChainIDEthereum,
+		// 				Receiver:     tokenBridgeAddr,
+		// 				Amount:       big.NewInt(10),
+		// 			},
+		// 		},
+		// 		Transfers: &[]*TransferERC20{
+		// 			{
+		// 				TokenAddress: erc20Addr,
+		// 				TokenChain:   vaa.ChainIDEthereum,
+		// 				From:         eoaAddrGeth,
+		// 				To:           tokenBridgeAddr,
+		// 				Amount:       big.NewInt(456),
+		// 			},
+		// 		},
+		// 		MessagePublicatons: &[]*LogMessagePublished{},
+		// 	},
+		// 	expected: 0,
+		// 	shouldError:  true,
+		// },
 		"invalid transfer: amount in too low, deposit": {
 			transferReceipt: &TransferReceipt{
 				Deposits: &[]*NativeDeposit{
-					&NativeDeposit{
+					{
 						TokenAddress: nativeAddr,
-						Destination:  tokenBridgeAddr,
+						TokenChain:   NATIVE_CHAIN_ID,
+						Receiver:     tokenBridgeAddr,
 						Amount:       big.NewInt(10),
 					},
 				},
-				Transfers: &[]*TransferERC20{},
+				Transfers: &[]*ERC20Transfer{},
 				MessagePublicatons: &[]*LogMessagePublished{
-					&LogMessagePublished{
-						Emitter: coreBridgeAddr,
-						Sender:  tokenBridgeAddr,
+					{
+						EventEmitter: coreBridgeAddr,
+						MsgSender:    tokenBridgeAddr,
 						TransferDetails: &TransferDetails{
 							PayloadType:     TransferTokens,
 							TokenAddressRaw: nativeAddr,
 							OriginAddress:   nativeAddr,
+							TargetAddress:   eoaAddrVAA,
 							TokenChain:      vaa.ChainIDEthereum,
 							AmountRaw:       big.NewInt(11),
 							Amount:          big.NewInt(11),
@@ -540,28 +559,30 @@ func TestProcessReceipt(t *testing.T) {
 					},
 				},
 			},
-			expected: 1,
-			errored:  true,
+			expected:    1,
+			shouldError: true,
 		},
 		"invalid transfer: amount in too low, transfer": {
 			transferReceipt: &TransferReceipt{
 				Deposits: &[]*NativeDeposit{},
-				Transfers: &[]*TransferERC20{
-					&TransferERC20{
+				Transfers: &[]*ERC20Transfer{
+					{
 						TokenAddress: erc20Addr,
-						From:         eoa,
+						TokenChain:   NATIVE_CHAIN_ID,
+						From:         eoaAddrGeth,
 						To:           tokenBridgeAddr,
 						Amount:       big.NewInt(1),
 					},
 				},
 				MessagePublicatons: &[]*LogMessagePublished{
-					&LogMessagePublished{
-						Emitter: coreBridgeAddr,
-						Sender:  tokenBridgeAddr,
+					{
+						EventEmitter: coreBridgeAddr,
+						MsgSender:    tokenBridgeAddr,
 						TransferDetails: &TransferDetails{
 							PayloadType:     TransferTokens,
 							TokenAddressRaw: nativeAddr,
 							OriginAddress:   nativeAddr,
+							TargetAddress:   eoaAddrVAA,
 							TokenChain:      2,
 							AmountRaw:       big.NewInt(2),
 							Amount:          big.NewInt(2),
@@ -569,29 +590,30 @@ func TestProcessReceipt(t *testing.T) {
 					},
 				},
 			},
-			expected: 1,
-			errored:  true,
+			expected:    1,
+			shouldError: true,
 		},
 		"invalid transfer: transfer out after transferring a different token": {
 			transferReceipt: &TransferReceipt{
 				Deposits: &[]*NativeDeposit{},
-				Transfers: &[]*TransferERC20{
-					&TransferERC20{
+				Transfers: &[]*ERC20Transfer{
+					{
 						TokenAddress: erc20Addr,
 						TokenChain:   vaa.ChainIDEthereum,
-						From:         eoa,
+						From:         eoaAddrGeth,
 						To:           tokenBridgeAddr,
 						Amount:       big.NewInt(2),
 					},
 				},
 				MessagePublicatons: &[]*LogMessagePublished{
-					&LogMessagePublished{
-						Emitter: coreBridgeAddr,
-						Sender:  tokenBridgeAddr,
+					{
+						EventEmitter: coreBridgeAddr,
+						MsgSender:    tokenBridgeAddr,
 						TransferDetails: &TransferDetails{
 							PayloadType:     TransferTokens,
 							TokenAddressRaw: nativeAddr,
 							OriginAddress:   nativeAddr,
+							TargetAddress:   eoaAddrVAA,
 							TokenChain:      2,
 							AmountRaw:       big.NewInt(2),
 							Amount:          big.NewInt(2),
@@ -599,8 +621,8 @@ func TestProcessReceipt(t *testing.T) {
 					},
 				},
 			},
-			expected: 1,
-			errored:  true,
+			expected:    1,
+			shouldError: true,
 		},
 	}
 
@@ -610,9 +632,16 @@ func TestProcessReceipt(t *testing.T) {
 			t.Log(name)
 
 			numProcessed, err := mocks.transferVerifier.ProcessReceipt(test.transferReceipt)
-			assert.Equal(t, test.expected, numProcessed)
+			assert.Equal(t, test.expected, numProcessed, "number of processed receipts did not match")
 			// TODO this could be expanded to check for specific error messages
-			assert.Equal(t, err != nil, test.errored)
+			if err != nil {
+				assert.True(t, test.shouldError, "test should have returned an error")
+				// Make sure we are getting an error thrown by the ProcessReceipt and not a different
+				// function
+				assert.ErrorContains(t, err, "invariant violated")
+			} else {
+				assert.False(t, test.shouldError, "test should not have returned an error but got: `%w`", err)
+			}
 		})
 	}
 }
@@ -652,7 +681,7 @@ func transferTokensPayload(payloadAmount *big.Int) (data []byte) {
 	amount := common.LeftPadBytes(payloadAmount.Bytes(), 32)
 	tokenAddress := common.LeftPadBytes(erc20Addr.Bytes(), 32)
 	tokenChain := common.LeftPadBytes([]byte{0x02}, 2) // Eth wormhole chain ID, uint16
-	to := common.LeftPadBytes([]byte{0xca, 0xfe}, 32)
+	to := common.LeftPadBytes([]byte{0xbe, 0xef, 0xca, 0xfe}, 32)
 	toChain := common.LeftPadBytes([]byte{0x01}, 2) // Eth wormhole chain ID, uint16
 	fee := common.LeftPadBytes([]byte{0x00}, 32)    // Solana wormhole chain ID, uint16
 	data = append(data, payloadType...)

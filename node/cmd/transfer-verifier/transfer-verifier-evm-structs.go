@@ -32,45 +32,29 @@ var (
 var (
 	// wrappedAsset(uint16 tokenChainId, bytes32 tokenAddress) => 0x1ff1e286
 	TOKEN_BRIDGE_WRAPPED_ASSET = []byte("\x1f\xf1\xe2\x86")
-
 	// decimals() => 0x313ce567
 	ERC20_DECIMALS_SIGNATURE = []byte("\x31\x3c\xe5\x67")
 )
-
-// The Wormhole Chain ID for the chain being monitored
-const NATIVE_CHAIN_ID = 2
 
 // Fixed addresses
 var (
 	// https://etherscan.io/token/0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2
 	WETH_ADDRESS     = common.HexToAddress("c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2")
 	ZERO_ADDRESS     = common.BytesToAddress([]byte{0x00})
-	ZERO_VAA_ADDRESS = vaa.Address([]byte{0x00})
+	ZERO_ADDRESS_VAA = VAAAddrFrom(ZERO_ADDRESS)
 )
 
+// EVM chain constants
 const (
+	// The Wormhole Chain ID for the chain being monitored
+	NATIVE_CHAIN_ID = 2
+	// EVM uses 32 bytes for words. Note that vaa.Address is an alias for a slice of 32 bytes
+	EVM_WORD_LENGTH = 32
 	// The expected total number of indexed topics for an ERC20 Transfer event
 	TOPICS_COUNT_TRANSFER = 3
 	// The expected total number of indexed topics for a WETH Deposit event
 	TOPICS_COUNT_DEPOSIT = 2
 )
-
-type connector interface {
-	ParseLogMessagePublished(log types.Log) (*ethabi.AbiLogMessagePublished, error)
-}
-
-type evmClient interface {
-	// getDecimals()
-	CallContract(ctx context.Context, msg ethereum.CallMsg, blockNumber *big.Int) ([]byte, error)
-}
-
-type TVAddresses struct {
-	CoreBridgeAddr common.Address
-	// Address of the Wormhole token bridge contract for this chain
-	TokenBridgeAddr common.Address
-	// Wrapped version of the native asset, e.g. WETH for Ethereum
-	WrappedNativeAddr common.Address
-}
 
 // TransferVerifier contains configuration values for verifying transfers.
 type TransferVerifier[E evmClient, C connector] struct {
@@ -83,12 +67,32 @@ type TransferVerifier[E evmClient, C connector] struct {
 	client E
 }
 
+// Important addresses for Transfer Verification.
+type TVAddresses struct {
+	CoreBridgeAddr common.Address
+	// Address of the Wormhole token bridge contract for this chain
+	TokenBridgeAddr common.Address
+	// Wrapped version of the native asset, e.g. WETH for Ethereum
+	WrappedNativeAddr common.Address
+}
+
+type connector interface {
+	ParseLogMessagePublished(log types.Log) (*ethabi.AbiLogMessagePublished, error)
+}
+
+type evmClient interface {
+	// getDecimals()
+	CallContract(ctx context.Context, msg ethereum.CallMsg, blockNumber *big.Int) ([]byte, error)
+}
+
+// Abstraction over the fields that are expected to be present for Transfer types encoded in receipt logs: Deposits, Transfers,
+// and LogMessagePublished events.
 type TransferLog interface {
 	// Amount after (de)normalization
 	TransferAmount() *big.Int
-	// The EOA or contract that initiated the transfer
+	// The Transferror: EOA or contract that initiated the transfer. Not to be confused with msg.sender.
 	Sender() vaa.Address
-	// Fund recipient
+	// The Transferee. Ultimate recipient of funds.
 	Destination() vaa.Address
 	// Event emitter
 	Emitter() common.Address // Emitter will always be an Ethereum address
@@ -98,10 +102,8 @@ type TransferLog interface {
 	OriginAddress() vaa.Address
 }
 
-// Abstraction over a Deposit event for a wrapped native asset.
+// Abstraction over a Deposit event for a wrapped native asset, e.g. WETH for Ethereum.
 type NativeDeposit struct {
-	// Which contract emitted the event. Should be equal to TokenAddress.
-	EventEmitter common.Address
 	// The address of the token.
 	TokenAddress common.Address
 	// The native chain of the token (where it was minted)
@@ -115,17 +117,18 @@ func (d *NativeDeposit) TransferAmount() *big.Int {
 }
 
 func (d *NativeDeposit) Destination() vaa.Address {
-	return vaa.Address(d.Receiver.Bytes())
+	return VAAAddrFrom(d.Receiver)
 }
 
 // Deposit does not actually have a sender but this is required to implement the interface
 func (d *NativeDeposit) Sender() vaa.Address {
 	// Sender is not present in the Logs emitted for a Deposit
-	return ZERO_VAA_ADDRESS
+	return ZERO_ADDRESS_VAA
 }
 
 func (d *NativeDeposit) Emitter() common.Address {
-	return d.Emitter()
+	// Event emitter of the Deposit should be equal to TokenAddress.
+	return d.TokenAddress
 }
 
 func (d *NativeDeposit) OriginChain() vaa.ChainID {
@@ -133,11 +136,11 @@ func (d *NativeDeposit) OriginChain() vaa.ChainID {
 }
 
 func (d *NativeDeposit) OriginAddress() vaa.Address {
-	return vaa.Address(d.TokenAddress.Bytes())
+	return VAAAddrFrom(d.TokenAddress)
 }
 
 // Abstraction over an ERC20 Transfer event.
-type TransferERC20 struct {
+type ERC20Transfer struct {
 	// The address of the token. Also equivalent to the Emitter of the event.
 	TokenAddress common.Address
 	// The native chain of the token (where it was minted)
@@ -147,28 +150,29 @@ type TransferERC20 struct {
 	Amount     *big.Int
 }
 
-func (t *TransferERC20) TransferAmount() *big.Int {
+func (t *ERC20Transfer) TransferAmount() *big.Int {
 	return t.Amount
 }
 
-func (t *TransferERC20) Sender() vaa.Address {
-	return vaa.Address(t.From.Bytes())
+func (t *ERC20Transfer) Sender() vaa.Address {
+	return VAAAddrFrom(t.From)
 }
 
-func (t *TransferERC20) Destination() vaa.Address {
-	return vaa.Address(t.To.Bytes())
+func (t *ERC20Transfer) Destination() vaa.Address {
+	return VAAAddrFrom(t.To)
 }
 
-func (t *TransferERC20) Emitter() common.Address {
-	return t.Emitter()
+func (t *ERC20Transfer) Emitter() common.Address {
+	// The TokenAddress is equal to the Emitter for ERC20 Transfers
+	return t.TokenAddress
 }
 
-func (t *TransferERC20) OriginChain() vaa.ChainID {
+func (t *ERC20Transfer) OriginChain() vaa.ChainID {
 	return t.TokenChain
 }
 
-func (t *TransferERC20) OriginAddress() vaa.Address {
-	return vaa.Address(t.TokenAddress.Bytes())
+func (t *ERC20Transfer) OriginAddress() vaa.Address {
+	return VAAAddrFrom(t.TokenAddress)
 }
 
 // Abstraction over a LogMessagePublished event emitted by the core bridge.
@@ -191,7 +195,7 @@ func (l *LogMessagePublished) Emitter() common.Address {
 }
 
 func (l *LogMessagePublished) Sender() vaa.Address {
-	return vaa.Address(l.MsgSender.Bytes())
+	return VAAAddrFrom(l.MsgSender)
 }
 
 func (l *LogMessagePublished) TransferAmount() *big.Int {
@@ -199,7 +203,7 @@ func (l *LogMessagePublished) TransferAmount() *big.Int {
 }
 
 func (l *LogMessagePublished) OriginAddress() vaa.Address {
-	return vaa.Address(l.TransferDetails.OriginAddress.Bytes())
+	return VAAAddrFrom(l.TransferDetails.OriginAddress)
 }
 
 func (l *LogMessagePublished) OriginChain() vaa.ChainID {
@@ -209,7 +213,7 @@ func (l *LogMessagePublished) OriginChain() vaa.ChainID {
 // Abstraction over an EVM transaction receipt for Token Bridge transfer.
 type TransferReceipt struct {
 	Deposits  *[]*NativeDeposit
-	Transfers *[]*TransferERC20
+	Transfers *[]*ERC20Transfer
 	// There must be at least one LogMessagePublished for a valid receipt.
 	MessagePublicatons *[]*LogMessagePublished
 }
@@ -256,12 +260,12 @@ func (tv *TransferVerifier[ethClient, connector]) unwrapIfWrapped(
 	}
 
 	// prepare eth_call data, 4-byte signature + 2x 32 byte arguments
-	calldata := make([]byte, 4+32+32)
+	calldata := make([]byte, 4+EVM_WORD_LENGTH+EVM_WORD_LENGTH)
 
 	copy(calldata, TOKEN_BRIDGE_WRAPPED_ASSET)
 	// Add the uint16 tokenChain as the last two bytes in the first argument
 	binary.BigEndian.PutUint16(calldata[4+30:], uint16(tokenChain))
-	copy(calldata[4+32:], tokenAddress)
+	copy(calldata[4+EVM_WORD_LENGTH:], tokenAddress)
 
 	ethCallMsg := ethereum.CallMsg{
 		To:   &tv.Addresses.TokenBridgeAddr,
@@ -283,55 +287,78 @@ func (tv *TransferVerifier[ethClient, connector]) unwrapIfWrapped(
 	return tokenAddressNative, nil
 }
 
-func validate[L TransferLog](tLog TransferLog, tv *TVAddresses) (key string, relevant bool, err error) {
-	// Whether to skip this event because it doesn't matter for the purposes of Transfer Verification
-	relevant = false
-	key = ""
-	if tLog.TransferAmount() == nil {
-		return key, relevant, errors.New("transfer amount is nil")
-	}
-
-	if cmp(tLog.Destination(), ZERO_VAA_ADDRESS) == 0 {
-		return key, relevant, errors.New("destination is not set")
-	}
-
-	if cmp(tLog.OriginAddress(), ZERO_VAA_ADDRESS) == 0 {
-		return key, relevant, errors.New("origin is not set")
-	}
-	if cmp(tLog.Destination(), tv.TokenBridgeAddr) != 0 {
-		return key, relevant, errors.New("destination must be token bridge")
-	}
-
-	// TODO: Move string check for vaa unknown here
-	// if cmp(tLog.OriginChain(), ZERO_VAA_ADDRESS) == 0 {
-	// 	return errors.New("nil amount")
-	// }
+// Remove irrelevant logs from consideration. Returns a string of the form "address-chain" for relevant entries
+func relevant[L TransferLog](tLog TransferLog, tv *TVAddresses) (key string, relevant bool) {
 
 	switch log := tLog.(type) {
 	case *NativeDeposit:
-		// Deposit does not actually have a sender
-		if cmp(tLog.Sender(), ZERO_VAA_ADDRESS) != 0 {
-			return key, relevant, errors.New("invalid: sender address for Deposit should be 0")
+		// Skip native deposit events emitted by contracts other than the configured wrapped native address.
+		if cmp(log.Emitter(), tv.WrappedNativeAddr) != 0 {
+			return
 		}
-		if cmp(tLog.Emitter(), tv.WrappedNativeAddr) != 0 {
-			// Skip native deposit events emitted by contracts other than the configured wrapped native address.
-			return key, true, nil
-		}
-	case *TransferERC20:
-		if cmp(tLog.Sender(), ZERO_VAA_ADDRESS) == 0 {
-			return key, relevant, errors.New("sender cannot be zero")
+	case *ERC20Transfer:
+		if cmp(log.Destination(), tv.TokenBridgeAddr) != 0 {
+			return
 		}
 	case *LogMessagePublished:
 		// This check is already done elsewhere but it's important.
 		if cmp(log.Emitter(), tv.CoreBridgeAddr) != 0 {
-			return key, relevant, errors.New("emitter must be core bridge")
+			return
 		}
-		if cmp(tLog.Sender(), tv.TokenBridgeAddr) != 0 {
-			return key, relevant, errors.New("sender must be token bridge")
+		// Only consider LogMessagePublished events with msg.sender equal to the Token Bridge
+		if cmp(log.Sender(), tv.TokenBridgeAddr) != 0 {
+			return
 		}
 	}
+	return fmt.Sprintf(KEY_FORMAT, tLog.OriginAddress(), tLog.OriginChain()), true
+}
 
-	return fmt.Sprintf(KEY_FORMAT, tLog.OriginAddress(), tLog.OriginChain()), true, nil
+func validate[L TransferLog](tLog TransferLog) (err error) {
+	// Whether to skip this event because it doesn't matter for the purposes of Transfer Verification
+	if tLog.TransferAmount() == nil {
+		return errors.New("transfer amount is nil")
+	}
+
+	if cmp(tLog.Destination(), ZERO_ADDRESS_VAA) == 0 {
+		return errors.New("destination is not set")
+	}
+
+	if cmp(tLog.OriginAddress(), ZERO_ADDRESS_VAA) == 0 {
+		return errors.New("originAddress is the zero address")
+	}
+
+	// TODO: Move string check for vaa unknown here
+	if tLog.OriginChain() == 0 {
+		return errors.New("originChain is 0")
+	}
+
+	switch log := tLog.(type) {
+	case *NativeDeposit:
+		// Deposit does not actually have a sender, so it should always be equal to the zero address.
+		if cmp(log.Sender(), ZERO_ADDRESS_VAA) != 0 {
+			return errors.New("invalid: sender address for Deposit must be 0")
+		}
+		if cmp(log.Emitter(), log.TokenAddress) != 0 {
+			return errors.New("invalid: deposit emitter is not equal to its token address")
+		}
+	case *ERC20Transfer:
+		// Transfers and LogMessagePublished cannot have a sender with a 0 address
+		if cmp(log.Sender(), ZERO_ADDRESS_VAA) == 0 {
+			return errors.New("sender cannot be zero")
+		}
+		if cmp(log.Emitter(), log.TokenAddress) != 0 {
+			return errors.New("invalid: deposit emitter is not equal to its token address")
+		}
+	case *LogMessagePublished:
+		// Transfers and LogMessagePublished cannot have a sender with a 0 address
+		if cmp(log.Sender(), ZERO_ADDRESS_VAA) == 0 {
+			return errors.New("sender cannot be zero")
+		}
+	default:
+		return errors.New("invalid transfer log type: unknown")
+	}
+
+	return nil
 }
 
 // func (tv *TransferVerifier[E, C]) validate(t *TransferERC20) bool {
@@ -358,7 +385,7 @@ func (tv *TransferVerifier[evmClient, connector]) getDecimals(
 	}
 
 	result, err := tv.client.CallContract(ctx, ethCallMsg, nil)
-	if err != nil || len(result) < 32 {
+	if err != nil || len(result) < EVM_WORD_LENGTH {
 		tv.logger.Fatal("failed to get decimals for token",
 			zap.String("tokenAddress", tokenAddress.String()),
 			zap.Error(err))
@@ -369,7 +396,7 @@ func (tv *TransferVerifier[evmClient, connector]) getDecimals(
 	// returns a uint8 value encoded in string with 32-bytes. To get the decimals,
 	// we grab the last byte, expecting all the preceding bytes to be equal to 0.
 	// TODO: find out if there is some official documentation for why this uint8 is in the last index of the 32byte return.
-	decimals = result[31]
+	decimals = result[EVM_WORD_LENGTH-1]
 
 	// Add the decimal value to the cache
 	decimalsCache[tokenAddress] = decimals
@@ -380,12 +407,25 @@ func (tv *TransferVerifier[evmClient, connector]) getDecimals(
 	return decimals, nil
 }
 
+// Gives the representation of a geth address in vaa.Address
+func VAAAddrFrom(gethAddr common.Address) (vaaAddr vaa.Address) {
+	// Geth uses 20 bytes to represent an address. A VAA address is equivalent if it has the same
+	// final 20 bytes. The leading bytes are expected to be zero for both types.
+	vaaAddr = vaa.Address(common.LeftPadBytes(gethAddr[:], EVM_WORD_LENGTH))
+	return
+}
+
+// Interface useful for comparing vaa.Address and common.Address
 type Bytes interface {
 	Bytes() []byte
 }
 
-// Utility method for comparing common.Address and vaa.Address at the byte level. Under-the-hood they are both 32 byte
+// Utility method for comparing common.Address and vaa.Address at the byte level. Under the hood, they are both 32 byte
 // values.
 func cmp[some Bytes, other Bytes](a some, b other) int {
-	return bytes.Compare(a.Bytes(), b.Bytes())
+
+	return bytes.Compare(
+		common.LeftPadBytes(a.Bytes(), EVM_WORD_LENGTH),
+		common.LeftPadBytes(b.Bytes(), EVM_WORD_LENGTH),
+	)
 }
