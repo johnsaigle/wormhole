@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	fmtString "fmt"
 	"math/big"
 
 	// "github.com/celo-org/celo-blockchain/ethclient"
@@ -189,7 +190,7 @@ type LogMessagePublished struct {
 func (l *LogMessagePublished) Destination() (destination vaa.Address) {
 	if l.TransferDetails != nil {
 		destination = l.TransferDetails.TargetAddress
-	} 
+	}
 	return
 }
 
@@ -204,21 +205,21 @@ func (l *LogMessagePublished) Sender() vaa.Address {
 func (l *LogMessagePublished) TransferAmount() (amount *big.Int) {
 	if l.TransferDetails != nil {
 		return l.TransferDetails.Amount
-	} 
+	}
 	return
 }
 
 func (l *LogMessagePublished) OriginAddress() (origin vaa.Address) {
 	if l.TransferDetails != nil {
 		origin = VAAAddrFrom(l.TransferDetails.OriginAddress)
-	} 
+	}
 	return
 }
 
 func (l *LogMessagePublished) OriginChain() (chainID vaa.ChainID) {
 	if l.TransferDetails != nil {
 		chainID = l.TransferDetails.TokenChain
-	} 
+	}
 	return
 }
 
@@ -243,7 +244,7 @@ type TransferDetails struct {
 	PayloadType VAAPayloadType
 	// Raw token address parsed from the payload. May be wrapped.
 	OriginAddressRaw common.Address
-	TokenChain      vaa.ChainID
+	TokenChain       vaa.ChainID
 	// Original address of the token when minted natively. Corresponds to the "unwrapped" address in the token bridge.
 	OriginAddress common.Address
 	// Not necessarily an EVM address, so vaa.Address is used instead
@@ -252,6 +253,19 @@ type TransferDetails struct {
 	AmountRaw *big.Int
 	// Denormalized amount, accounting for decimal differences between contracts and chains
 	Amount *big.Int
+}
+
+func (td *TransferDetails) String() string {
+	return fmt.Sprintf(
+		"PayloadType: %d OriginAddressRaw: %s TokenChain: %d OriginAddress: %s TargetAddress: %s AmountRaw: %s Amount: %s",
+		td.PayloadType,
+		td.OriginAddressRaw,
+		td.TokenChain,
+		td.OriginAddress.String(),
+		td.TargetAddress.String(),
+		td.AmountRaw.String(),
+		td.Amount.String(),
+	)
 }
 
 // unwrapIfWrapped() returns the "unwrapped" address for a token a.k.a. the OriginAddress
@@ -283,11 +297,11 @@ func (tv *TransferVerifier[ethClient, connector]) unwrapIfWrapped(
 		To:   &tv.Addresses.TokenBridgeAddr,
 		Data: calldata,
 	}
-	tv.logger.Debug("calling wrappedAsset", zap.String("tokenChain", tokenChain.String()), zap.String("tokenAddress", fmt.Sprintf("%x", tokenAddress)))
+	tv.logger.Debug("calling wrappedAsset", zap.String("tokenChain", tokenChain.String()), zap.String("tokenAddress", fmtString.Sprintf("%x", tokenAddress)))
 
 	result, err := tv.client.CallContract(ctx, ethCallMsg, nil)
 	if err != nil {
-		return common.Address{}, fmt.Errorf("failed to get mapping for token %s", tokenAddressAsKey)
+		return common.Address{}, fmtString.Errorf("failed to get mapping for token %s", tokenAddressAsKey)
 	}
 
 	tokenAddressNative := common.BytesToAddress(result)
@@ -326,7 +340,7 @@ func relevant[L TransferLog](tLog TransferLog, tv *TVAddresses) (key string, rel
 			return
 		}
 	}
-	return fmt.Sprintf(KEY_FORMAT, tLog.OriginAddress(), tLog.OriginChain()), true
+	return fmtString.Sprintf(KEY_FORMAT, tLog.OriginAddress(), tLog.OriginChain()), true
 }
 
 // validate() ensures a TransferLog is well-formed. This means that its fields are not nil and in most cases are not
@@ -353,7 +367,6 @@ func validate[L TransferLog](tLog TransferLog) (err error) {
 	if cmp(tLog.Destination(), ZERO_ADDRESS_VAA) == 0 {
 		return errors.New("destination is not set")
 	}
-
 
 	switch log := tLog.(type) {
 	case *NativeDeposit:
