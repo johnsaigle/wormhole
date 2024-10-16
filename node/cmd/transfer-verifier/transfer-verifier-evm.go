@@ -489,7 +489,7 @@ func (tv *TransferVerifier[evmClient, connector]) ProcessReceipt(
 		if err != nil {
 			return numProcessed, err
 		}
-		key, relevant := relevant[*ERC20Transfer](message, &tv.Addresses)
+		key, relevant := relevant[*LogMessagePublished](message, &tv.Addresses)
 		if !relevant {
 			tv.logger.Debug("skipping irrelevant message publication")
 			continue
