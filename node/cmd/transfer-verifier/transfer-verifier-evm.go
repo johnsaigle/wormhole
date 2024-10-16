@@ -17,6 +17,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	ethClient "github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/event"
 	"github.com/wormhole-foundation/wormhole/sdk/vaa"
 
 	ipfslog "github.com/ipfs/go-log/v2"
@@ -32,10 +33,12 @@ import (
 var (
 	// Holds previously-recorded decimals (uint8) for token addresses (common.Address)
 	// that have been observed.
+	// TODO: Add common coins (USDC, USDT, etc.) in compilation. No need to fetch these.
 	decimalsCache = make(map[common.Address]uint8)
 
 	// Maps the 32-byte token addresses received via LogMessagePublished events to their
 	// unwrapped 20-byte addresses. This mapping is also used for non-wrapped token addresses.
+	// TODO: Add common coins (USDC, USDT, etc.) in compilation. No need to fetch these.
 	wrappedCache = make(map[string]common.Address)
 )
 
@@ -52,6 +55,11 @@ var (
 	evmTokenBridgeContract *string
 	pruneHeightDelta       *uint64
 	pruneFrequency         *time.Duration
+)
+
+const (
+	// Maximum number of attempts to establish a subscription to the LogMessagePublished event emitted by the core contract..
+	MAX_RETRIES = 5
 )
 
 // Settings for how often to prune the processed receipts.
@@ -132,10 +140,11 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 		client:       ethConnector.Client(),
 	}
 
-	logs := make(chan *ethabi.AbiLogMessagePublished)
+	logC := make(chan *ethabi.AbiLogMessagePublished)
 	errC := make(chan error)
 
-	sub, err := ethConnector.WatchLogMessagePublished(context.Background(), errC, logs)
+	sub, err := tryConnect(ethConnector, logC, errC, transferVerifier.logger)
+
 	if err != nil {
 		logger.Fatal("Error on WatchLogMessagePublished",
 			zap.Error(err))
@@ -167,6 +176,11 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 		select {
 		case err := <-sub.Err():
 			logger.Fatal("got error on ethConnector's error channel", zap.Error(err))
+			// TODO: do we need to overwrite sub? any risk?
+			_, connectErr := tryConnect(ethConnector, logC, errC, transferVerifier.logger)
+			if connectErr != nil {
+				logger.Fatal("Could not reconnect. Terminating", zap.Error(err))
+			}
 		// Do cleanup and statistics reporting
 		case <-ticker.C:
 
@@ -187,7 +201,7 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 				zap.Int("numPrunedReceipts", numPrunedReceipts))
 
 		// Process observed LogMessagePublished events
-		case vLog := <-logs:
+		case vLog := <-logC:
 
 			logger.Debug("detected LogMessagePublished event",
 				zap.String("txHash", vLog.Raw.TxHash.String()))
@@ -223,7 +237,9 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 			// parse raw transaction receipt into high-level struct containing transfer details
 			transferReceipt, err := transferVerifier.ParseReceipt(receipt)
 			if err != nil || transferReceipt == nil {
-				logger.Error("error when parsing receipt", zap.String("receipt hash", receipt.TxHash.String()), zap.Error(err))
+				logger.Error("error when parsing receipt",
+					zap.String("receipt hash", receipt.TxHash.String()),
+					zap.Error(err))
 				continue
 			}
 
@@ -234,7 +250,9 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 				if err != nil {
 					// The unwrapped address and the denormalized amount are necessary for checking
 					// that the amount matches.
-					logger.Error("error when populating wormhole details", zap.Error(err))
+					logger.Error("error when populating wormhole details. cannot verify receipt!",
+						zap.String("receipt", receipt.TxHash.String()),
+						zap.Error(err))
 					continue
 				}
 				message.TransferDetails = newDetails
@@ -256,6 +274,39 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 			countLogsProcessed += int(numProcessed)
 		}
 	}
+}
+
+func tryConnect[C connectors.Connector](
+	connector C,
+	logC chan *ethabi.AbiLogMessagePublished,
+	errC chan error,
+	logger zap.Logger,
+) (sub event.Subscription, err error) {
+	attempts := 0
+	for attempts < MAX_RETRIES {
+		attempts++
+		logger.Debug("Attempting connection", 
+			zap.Int("connection attempt", attempts), 
+			zap.Int("max retries", MAX_RETRIES))
+
+		sub, err = connector.WatchLogMessagePublished(
+			context.Background(), 
+			errC, 
+			logC,
+			)
+		if err != nil {
+			logger.Warn("Could not establish connection", 
+				zap.Error(err))
+			continue
+		}
+		if sub == nil {
+			logger.Warn("Could not establish connection: nil event subscription")
+			continue
+		}
+		/// Successful connection
+		return
+	}
+	return 
 }
 
 // ParseReceipt() converts a go-ethereum receipt struct into a TransferReceipt. It makes use of the ethConnector to
@@ -470,7 +521,7 @@ func (tv *TransferVerifier[evmClient, connector]) ProcessReceipt(
 		// }
 		// if cmp(td.OriginAddress, ZERO_ADDRESS) == 0 {
 		// 	tv.logger.Error("OriginAddress have not been populated (has not been unwrapped)",
-		// 		zap.String("tokenAddressRaw", td.TokenAddressRaw.String()),
+		// 		zap.String("tokenAddressRaw", td.OriginAddressRaw.String()),
 		// 	)
 		// 	continue
 		// }
@@ -560,7 +611,7 @@ func parseLogMessagePublishedPayload(
 	return &TransferDetails{
 		PayloadType:     VAAPayloadType(hdr.Type),
 		AmountRaw:       hdr.Amount,
-		TokenAddressRaw: common.BytesToAddress(hdr.OriginAddress.Bytes()),
+		OriginAddressRaw: common.BytesToAddress(hdr.OriginAddress.Bytes()),
 		TokenChain:      vaa.ChainID(hdr.OriginChain),
 		TargetAddress:   hdr.TargetAddress,
 		// these fields are populated by RPC calls later
@@ -573,20 +624,21 @@ func parseLogMessagePublishedPayload(
 // addWormholeDetails() makes requests to the token bridge and token contract to get detailed, wormhole-specific information about
 // a transfer. Modifies parameter `details` as a side-effect
 func (tv *TransferVerifier[ethClient, connector]) addWormholeDetails(details *TransferDetails) (newDetails *TransferDetails, err error) {
-	decimals, err := tv.getDecimals(details.TokenAddressRaw)
+
+	decimals, err := tv.getDecimals(details.OriginAddressRaw)
 	if err != nil {
-		return newDetails, err
+		return
 	}
 	denormalized := denormalize(details.AmountRaw, decimals)
 
 	var originAddress common.Address
 	if details.TokenChain == NATIVE_CHAIN_ID {
-		originAddress = common.BytesToAddress(details.TokenAddressRaw.Bytes())
+		originAddress = common.BytesToAddress(details.OriginAddressRaw.Bytes())
 	} else {
-		originAddress, err = tv.unwrapIfWrapped(details.TokenAddressRaw.Bytes(), details.TokenChain)
+		originAddress, err = tv.unwrapIfWrapped(details.OriginAddressRaw.Bytes(), details.TokenChain)
 	}
 	if err != nil {
-		return newDetails, err
+		return
 	}
 
 	if cmp(originAddress, ZERO_ADDRESS) == 0 {
