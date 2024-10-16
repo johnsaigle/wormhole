@@ -237,7 +237,7 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 			// parse raw transaction receipt into high-level struct containing transfer details
 			transferReceipt, err := transferVerifier.ParseReceipt(receipt)
 			if err != nil || transferReceipt == nil {
-				logger.Error("error when parsing receipt",
+				logger.Warn("error when parsing receipt. skipping validation",
 					zap.String("receipt hash", receipt.TxHash.String()),
 					zap.Error(err))
 				continue
@@ -251,7 +251,8 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 					// The unwrapped address and the denormalized amount are necessary for checking
 					// that the amount matches.
 					logger.Error("error when populating wormhole details. cannot verify receipt!",
-						zap.String("receipt", receipt.TxHash.String()),
+						zap.String("txHash", receipt.TxHash.String()),
+						zap.String("parsed transfer details", message.TransferDetails.String()),
 						zap.Error(err))
 					continue
 				}
@@ -563,6 +564,12 @@ func parseLogMessagePublishedPayload(
 	// Corresponds to LogMessagePublished.Payload as returned by the ABI parsing operation in the ethConnector.
 	data []byte,
 ) (*TransferDetails, error) {
+
+	// This method is already called by DecodeTransferPayloadHdr but the error message is unclear. Doing a manual
+	// check here lets us return a more helpful error message.
+	if !vaa.IsTransfer(data) {
+		return nil, errors.New("payload is not a transfer type. no need to process.")
+	}
 
 	// Note: vaa.DecodeTransferPayloadHdr performs validation on data, e.g. length checks.
 	hdr, err := vaa.DecodeTransferPayloadHdr(data)
