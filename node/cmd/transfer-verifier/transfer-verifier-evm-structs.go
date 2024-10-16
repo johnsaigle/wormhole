@@ -306,9 +306,6 @@ func (tv *TransferVerifier[ethClient, connector]) unwrapIfWrapped(
 
 	tokenAddressNative := common.BytesToAddress(result)
 	wrappedCache[tokenAddressAsKey] = tokenAddressNative
-	if cmp(tokenAddressNative, ZERO_ADDRESS) == 0 {
-		return common.Address{}, errors.New("unwrapped address returned the zero address")
-	}
 
 	return tokenAddressNative, nil
 }
@@ -320,6 +317,10 @@ func relevant[L TransferLog](tLog TransferLog, tv *TVAddresses) (key string, rel
 	case *NativeDeposit:
 		// Skip native deposit events emitted by contracts other than the configured wrapped native address.
 		if cmp(log.Emitter(), tv.WrappedNativeAddr) != 0 {
+			return
+		}
+
+		if cmp(log.Destination(), tv.TokenBridgeAddr) != 0 {
 			return
 		}
 	case *ERC20Transfer:
@@ -348,67 +349,71 @@ func relevant[L TransferLog](tLog TransferLog, tv *TVAddresses) (key string, rel
 func validate[L TransferLog](tLog TransferLog) (err error) {
 
 	if cmp(tLog.Emitter(), ZERO_ADDRESS) == 0 {
-		return errors.New("emitter is the zero address")
+		return errors.New("invalid log: emitter is the zero address")
 	}
 
-	// TODO: Move string check for vaa unknown here
 	if tLog.OriginChain() == 0 {
-		return errors.New("originChain is 0")
+		return errors.New("invalid log: originChain is 0")
 	}
 
-	if cmp(tLog.OriginAddress(), ZERO_ADDRESS_VAA) == 0 {
-		return errors.New("originAddress is the zero address")
-	}
+	// if cmp(tLog.OriginAddress(), ZERO_ADDRESS_VAA) == 0 {
+	// 	return errors.New("originAddress is the zero address")
+	// }
 
 	if tLog.TransferAmount() == nil {
-		return errors.New("transfer amount is nil")
+		return errors.New("invalid log: transfer amount is nil")
 	}
 
 	if cmp(tLog.Destination(), ZERO_ADDRESS_VAA) == 0 {
-		return errors.New("destination is not set")
+		return errors.New("invalid log: destination is not set")
 	}
 
 	switch log := tLog.(type) {
 	case *NativeDeposit:
 		// Deposit does not actually have a sender, so it should always be equal to the zero address.
 		if cmp(log.Sender(), ZERO_ADDRESS_VAA) != 0 {
-			return errors.New("invalid: sender address for Deposit must be 0")
+			return errors.New("invalid log: sender address for Deposit must be 0")
 		}
 		if cmp(log.Emitter(), log.TokenAddress) != 0 {
-			return errors.New("invalid: deposit emitter is not equal to its token address")
+			return errors.New("invalid log: deposit emitter is not equal to its token address")
 		}
 	case *ERC20Transfer:
 		// Transfers and LogMessagePublished cannot have a sender with a 0 address
 		if cmp(log.Sender(), ZERO_ADDRESS_VAA) == 0 {
-			return errors.New("sender cannot be zero")
+			return errors.New("invalid log: sender cannot be zero")
 		}
 		if cmp(log.Emitter(), log.TokenAddress) != 0 {
-			return errors.New("invalid: deposit emitter is not equal to its token address")
+			return errors.New("invalid log: deposit emitter is not equal to its token address")
 		}
 	case *LogMessagePublished:
 		// Transfers and LogMessagePublished cannot have a sender with a 0 address
 		if cmp(log.Sender(), ZERO_ADDRESS_VAA) == 0 {
-			return errors.New("sender cannot be zero")
+			return errors.New("invalid log: sender cannot be zero")
 		}
-		if cmp(log.OriginAddress(), ZERO_ADDRESS_VAA) == 0 {
-			return errors.New("origin cannot be zero")
-		}
+
+		// TODO is this valid for assets that return the zero address from unwrap?
+		// if cmp(log.OriginAddress(), ZERO_ADDRESS_VAA) == 0 {
+		// 	return errors.New("origin cannot be zero")
+		// }
 
 		// The following values are not exposed by the interface, so check them directly here.
 		if log.TransferDetails == nil {
-			return errors.New("TransferDetails cannot be nil")
+			return errors.New("invalid log: TransferDetails cannot be nil")
+		}
+		if cmp(log.TransferDetails.TargetAddress, ZERO_ADDRESS_VAA) == 0 {
+			return errors.New("invalid log: target address cannot be zero")
 		}
 		if cmp(log.TransferDetails.OriginAddressRaw, ZERO_ADDRESS_VAA) == 0 {
-			return errors.New("origin address raw cannot be zero")
+			return errors.New("invalid log: origin address raw cannot be zero")
 		}
 		if log.TransferDetails.AmountRaw == nil {
-			return errors.New("amountRaw cannot be nil")
+			return errors.New("invalid log: amountRaw cannot be nil")
 		}
 		if log.TransferDetails.PayloadType != TransferTokens && log.TransferDetails.PayloadType != TransferTokensWithPayload {
-			return errors.New("payload type is not a transfer type")
+			return errors.New("invalid log: payload type is not a transfer type")
 		}
 	default:
-		return errors.New("invalid transfer log type: unknown")
+		return errors.New("invalid log: invalid transfer log type: unknown")
 	}
 
 	return nil

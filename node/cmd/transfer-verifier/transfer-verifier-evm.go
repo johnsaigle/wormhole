@@ -286,17 +286,17 @@ func tryConnect[C connectors.Connector](
 	attempts := 0
 	for attempts < MAX_RETRIES {
 		attempts++
-		logger.Debug("Attempting connection", 
-			zap.Int("connection attempt", attempts), 
+		logger.Debug("Attempting connection",
+			zap.Int("connection attempt", attempts),
 			zap.Int("max retries", MAX_RETRIES))
 
 		sub, err = connector.WatchLogMessagePublished(
-			context.Background(), 
-			errC, 
+			context.Background(),
+			errC,
 			logC,
-			)
+		)
 		if err != nil {
-			logger.Warn("Could not establish connection", 
+			logger.Warn("Could not establish connection",
 				zap.Error(err))
 			continue
 		}
@@ -307,7 +307,7 @@ func tryConnect[C connectors.Connector](
 		/// Successful connection
 		return
 	}
-	return 
+	return
 }
 
 // ParseReceipt() converts a go-ethereum receipt struct into a TransferReceipt. It makes use of the ethConnector to
@@ -435,18 +435,6 @@ func (tv *TransferVerifier[evmClient, connector]) ProcessReceipt(
 		}
 
 		upsert(&transferredIntoBridge, key, deposit.TransferAmount())
-		// if deposit.Receiver != tv.tokenBridgeAddr {
-		// 	tv.logger.Debug("skipping deposit event with destination not equal to the token bridge",
-		// 		zap.String("destination", deposit.Receiver.String()))
-		// 	continue
-		// }
-
-		// if deposit.TokenAddress != tv.wrappedNativeAddr {
-		// 	tv.logger.Debug("skipping deposit event not from the wrapped native asset contract",
-		// 		zap.String("tokenAddress", deposit.TokenAddress.String()),
-		// 		zap.String("amount", deposit.Amount.String()))
-		// 	continue
-		// }
 
 		tv.logger.Debug("a deposit into the token bridge was recorded",
 			zap.String("tokenAddress", deposit.TokenAddress.String()),
@@ -454,14 +442,6 @@ func (tv *TransferVerifier[evmClient, connector]) ProcessReceipt(
 	}
 
 	for _, transfer := range *transferReceipt.Transfers {
-		// Filter for transfers into the token bridge
-		// if transfer.To != tv.tokenBridgeAddr {
-		// 	continue
-		// }
-		// if transfer.Amount == nil {
-		// 	tv.logger.Debug("skipping transfer event with nil amount")
-		// 	continue
-		// }
 		err := validate[*ERC20Transfer](transfer)
 		if err != nil {
 			return numProcessed, err
@@ -474,12 +454,6 @@ func (tv *TransferVerifier[evmClient, connector]) ProcessReceipt(
 		if key == "" {
 			return numProcessed, errors.New("Couldn't get key")
 		}
-		// key := fmt.Sprintf(KEY_FORMAT, transfer.TokenAddress, transfer.TokenChain)
-		// if _, exists := transferredIntoBridge[key]; !exists {
-		// 	transferredIntoBridge[key] = new(big.Int).Set(transfer.Amount)
-		// } else {
-		// 	transferredIntoBridge[key] = new(big.Int).Add(transferredIntoBridge[key], transfer.Amount)
-		// }
 		upsert(&transferredIntoBridge, key, transfer.TransferAmount())
 	}
 
@@ -577,11 +551,11 @@ func parseLogMessagePublishedPayload(
 		return nil, err
 	}
 	return &TransferDetails{
-		PayloadType:     VAAPayloadType(hdr.Type),
-		AmountRaw:       hdr.Amount,
+		PayloadType:      VAAPayloadType(hdr.Type),
+		AmountRaw:        hdr.Amount,
 		OriginAddressRaw: common.BytesToAddress(hdr.OriginAddress.Bytes()),
-		TokenChain:      vaa.ChainID(hdr.OriginChain),
-		TargetAddress:   hdr.TargetAddress,
+		TokenChain:       vaa.ChainID(hdr.OriginChain),
+		TargetAddress:    hdr.TargetAddress,
 		// these fields are populated by RPC calls later
 		Amount:        nil,
 		OriginAddress: common.Address{},
@@ -607,10 +581,6 @@ func (tv *TransferVerifier[ethClient, connector]) addWormholeDetails(details *Tr
 	}
 	if err != nil {
 		return
-	}
-
-	if cmp(originAddress, ZERO_ADDRESS) == 0 {
-		tv.logger.Fatal("token address is zero address")
 	}
 
 	// TODO: It's probably better to modify the argument in-place rather than return new values
