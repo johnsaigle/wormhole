@@ -496,45 +496,6 @@ func (tv *TransferVerifier[evmClient, connector]) ProcessReceipt(
 		}
 		upsert(&requestedOutOfBridge, key, message.TransferAmount())
 
-		// // This should have already been skipped earlier in the script, but check for it here anyway.
-		// if message.EventEmitter != tv.coreBridgeAddr {
-		// 	tv.logger.Debug("skipping LogMessagePublished event because the emitter is not the core bridge",
-		// 		zap.String("emitter", message.EventEmitter.String()))
-		// 	continue
-		// }
-		// // This should have already been skipped earlier in the script, but check for it here anyway.
-		// if message.MsgSender != tv.tokenBridgeAddr {
-		// 	tv.logger.Debug("skipping LogMessagePublished event because the Sender is not token bridge",
-		// 		zap.String("sender", message.MsgSender.String()))
-		// 	continue
-		// }
-		// if td.PayloadType != TransferTokens && td.PayloadType != TransferTokensWithPayload {
-		// 	tv.logger.Debug("skipping LogMessagePublished event because of Payload type",
-		// 		zap.Int("payloadType", int(td.PayloadType)))
-		// 	continue
-		// }
-		//
-		// if td.Amount == nil {
-		// 	tv.logger.Error("Amount is nil (has not been normalized)",
-		// 		zap.String("amountRaw", td.AmountRaw.String()))
-		// 	continue
-		// }
-		// if cmp(td.OriginAddress, ZERO_ADDRESS) == 0 {
-		// 	tv.logger.Error("OriginAddress have not been populated (has not been unwrapped)",
-		// 		zap.String("tokenAddressRaw", td.OriginAddressRaw.String()),
-		// 	)
-		// 	continue
-		// }
-
-		// Sum up amount requested out of bridge
-		// key := fmt.Sprintf(KEY_FORMAT, td.OriginAddress, td.TokenChain)
-		// if _, exists := requestedOutOfBridge[key]; !exists {
-		// 	// Initialize the big.Int if it's not yet added.
-		// 	requestedOutOfBridge[key] = new(big.Int).Set(td.Amount)
-		// } else {
-		// 	// Add the amount from the transfer to the requestedOutOfBridge mapping
-		// 	requestedOutOfBridge[key] = new(big.Int).Add(requestedOutOfBridge[key], td.Amount)
-		// }
 		tv.logger.Debug("successfully parsed a LogMessagePublished event payload",
 			zap.String("tokenAddress", td.OriginAddress.String()),
 			zap.String("tokenChain", td.TokenChain.String()),
