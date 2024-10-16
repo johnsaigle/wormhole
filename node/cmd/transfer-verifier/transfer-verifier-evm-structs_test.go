@@ -37,17 +37,25 @@ func TestRelevantDeposit(t *testing.T) {
 		},
 		"irrelevant, deposit from non-native contract": {
 			input: NativeDeposit{
-				// the token address is what determines if the transfer is relevant
-				TokenAddress: usdcAddr,
+				TokenAddress: usdcAddr, // not Native
 				TokenChain:   NATIVE_CHAIN_ID,
 				Receiver:     tokenBridgeAddr,
 				Amount:       big.NewInt(500),
 			},
 			expected: result{"", false},
 		},
+		"irrelevant, deposit not sent to token bridge": {
+			input: NativeDeposit{
+				TokenAddress: nativeAddr,
+				TokenChain:   NATIVE_CHAIN_ID,
+				Receiver:     eoaAddrGeth, // not token bridge
+				Amount:       big.NewInt(500),
+			},
+			expected: result{"", false},
+		},
 		"irrelevant, sanity check for zero-address deposits": {
 			input: NativeDeposit{
-				TokenAddress: ZERO_ADDRESS,
+				TokenAddress: ZERO_ADDRESS, // zero address
 				TokenChain:   NATIVE_CHAIN_ID,
 				Receiver:     tokenBridgeAddr,
 				Amount:       big.NewInt(500),
@@ -89,7 +97,7 @@ func TestRelevantDeposit(t *testing.T) {
 		"relevant, LogMessagePublished": {
 			input: LogMessagePublished{
 				EventEmitter: coreBridgeAddr,
-				MsgSender: tokenBridgeAddr,
+				MsgSender:    tokenBridgeAddr,
 				TransferDetails: &TransferDetails{
 					PayloadType:      TransferTokens,
 					OriginAddressRaw: usdcAddr,
@@ -105,7 +113,7 @@ func TestRelevantDeposit(t *testing.T) {
 		"irrelevant, LogMessagePublished has a sender not equal to token bridge": {
 			input: LogMessagePublished{
 				EventEmitter: coreBridgeAddr,
-				MsgSender: eoaAddrGeth,
+				MsgSender:    eoaAddrGeth,
 				TransferDetails: &TransferDetails{
 					PayloadType:      TransferTokens,
 					OriginAddressRaw: usdcAddr,
@@ -121,7 +129,7 @@ func TestRelevantDeposit(t *testing.T) {
 		"irrelevant, LogMessagePublished not emitted by core bridge": {
 			input: LogMessagePublished{
 				EventEmitter: tokenBridgeAddr,
-				MsgSender: tokenBridgeAddr,
+				MsgSender:    tokenBridgeAddr,
 				TransferDetails: &TransferDetails{
 					PayloadType:      TransferTokens,
 					OriginAddressRaw: usdcAddr,
@@ -137,7 +145,7 @@ func TestRelevantDeposit(t *testing.T) {
 		"irrelevant, LogMessagePublished does not have a PayloadType corresponding to a Transfer": {
 			input: LogMessagePublished{
 				EventEmitter: coreBridgeAddr,
-				MsgSender: tokenBridgeAddr,
+				MsgSender:    tokenBridgeAddr,
 				TransferDetails: &TransferDetails{
 					PayloadType:      2,
 					OriginAddressRaw: usdcAddr,
@@ -344,6 +352,7 @@ func TestValidateERC20Transfer(t *testing.T) {
 
 			err := validate[*ERC20Transfer](&test.input)
 			require.Error(t, err)
+			assert.ErrorContains(t, err, "invalid log")
 		})
 	}
 
@@ -376,7 +385,7 @@ func TestValidateERC20Transfer(t *testing.T) {
 func TestValidateLogMessagePublished(t *testing.T) {
 	t.Parallel()
 
-	invalidTransfers := map[string]struct {
+	invalidMessages := map[string]struct {
 		input LogMessagePublished
 	}{
 		"invalid: zero-value for EventEmitter": {
@@ -469,21 +478,22 @@ func TestValidateLogMessagePublished(t *testing.T) {
 				},
 			},
 		},
-		"invalid: zero-value for OriginAddress": {
-			input: LogMessagePublished{
-				EventEmitter: coreBridgeAddr,
-				MsgSender:    tokenBridgeAddr,
-				TransferDetails: &TransferDetails{
-					PayloadType:      TransferTokens,
-					OriginAddressRaw: usdcAddr,
-					TokenChain:       NATIVE_CHAIN_ID,
-					// OriginAddress:   usdcAddr,
-					TargetAddress: eoaAddrVAA,
-					AmountRaw:     big.NewInt(7),
-					Amount:        big.NewInt(7),
-				},
-			},
-		},
+		// OriginAddress may be zero for unwrapped assets without a wrapped entry?
+		// "invalid: zero-value for OriginAddress": {
+		// 	input: LogMessagePublished{
+		// 		EventEmitter: coreBridgeAddr,
+		// 		MsgSender:    tokenBridgeAddr,
+		// 		TransferDetails: &TransferDetails{
+		// 			PayloadType:      TransferTokens,
+		// 			OriginAddressRaw: usdcAddr,
+		// 			TokenChain:       NATIVE_CHAIN_ID,
+		// 			// OriginAddress:   usdcAddr,
+		// 			TargetAddress: eoaAddrVAA,
+		// 			AmountRaw:     big.NewInt(7),
+		// 			Amount:        big.NewInt(7),
+		// 		},
+		// 	},
+		// },
 		"invalid: zero-value for TargetAddress": {
 			input: LogMessagePublished{
 				EventEmitter: coreBridgeAddr,
@@ -531,7 +541,7 @@ func TestValidateLogMessagePublished(t *testing.T) {
 		},
 	}
 
-	for name, test := range invalidTransfers {
+	for name, test := range invalidMessages {
 		test := test // NOTE: uncomment for Go < 1.22, see /doc/faq#closures_and_goroutines
 		t.Run(name, func(t *testing.T) {
 			t.Parallel() // marks each test case as capable of running in parallel with each other
@@ -539,6 +549,7 @@ func TestValidateLogMessagePublished(t *testing.T) {
 
 			err := validate[*LogMessagePublished](&test.input)
 			require.Error(t, err)
+			assert.ErrorContains(t, err, "invalid log")
 		})
 	}
 
