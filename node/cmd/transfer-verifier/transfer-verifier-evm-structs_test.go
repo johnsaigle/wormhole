@@ -134,6 +134,22 @@ func TestRelevantDeposit(t *testing.T) {
 			},
 			expected: result{"", false},
 		},
+		"irrelevant, LogMessagePublished does not have a PayloadType corresponding to a Transfer": {
+			input: LogMessagePublished{
+				EventEmitter: coreBridgeAddr,
+				MsgSender: tokenBridgeAddr,
+				TransferDetails: &TransferDetails{
+					PayloadType:      2,
+					OriginAddressRaw: usdcAddr,
+					TokenChain:       NATIVE_CHAIN_ID,
+					OriginAddress:    nativeAddr,
+					TargetAddress:    eoaAddrVAA,
+					AmountRaw:        big.NewInt(7),
+					Amount:           big.NewInt(7),
+				},
+			},
+			expected: result{"", false},
+		},
 	}
 
 	for name, test := range deposits {
@@ -529,12 +545,27 @@ func TestValidateLogMessagePublished(t *testing.T) {
 	validTransfers := map[string]struct {
 		input LogMessagePublished
 	}{
-		"valid": {
+		"valid and relevant": {
 			input: LogMessagePublished{
 				EventEmitter: coreBridgeAddr,
 				MsgSender:    tokenBridgeAddr,
 				TransferDetails: &TransferDetails{
 					PayloadType:      TransferTokens,
+					OriginAddressRaw: usdcAddr,
+					TokenChain:       NATIVE_CHAIN_ID,
+					OriginAddress:    eoaAddrGeth,
+					TargetAddress:    eoaAddrVAA,
+					AmountRaw:        big.NewInt(7),
+					Amount:           big.NewInt(7),
+				},
+			},
+		},
+		"valid and irrelevant": {
+			input: LogMessagePublished{
+				EventEmitter: usdcAddr,
+				MsgSender:    eoaAddrGeth,
+				TransferDetails: &TransferDetails{
+					PayloadType:      TransferTokensWithPayload,
 					OriginAddressRaw: usdcAddr,
 					TokenChain:       NATIVE_CHAIN_ID,
 					OriginAddress:    eoaAddrGeth,

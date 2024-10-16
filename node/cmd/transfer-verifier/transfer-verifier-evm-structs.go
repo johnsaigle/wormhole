@@ -321,6 +321,10 @@ func relevant[L TransferLog](tLog TransferLog, tv *TVAddresses) (key string, rel
 		if cmp(log.Sender(), tv.TokenBridgeAddr) != 0 {
 			return
 		}
+		// The following values are not exposed by the interface, so check them directly here.
+		if log.TransferDetails.PayloadType != TransferTokens && log.TransferDetails.PayloadType != TransferTokensWithPayload {
+			return
+		}
 	}
 	return fmt.Sprintf(KEY_FORMAT, tLog.OriginAddress(), tLog.OriginChain()), true
 }
@@ -388,7 +392,7 @@ func validate[L TransferLog](tLog TransferLog) (err error) {
 			return errors.New("amountRaw cannot be nil")
 		}
 		if log.TransferDetails.PayloadType != TransferTokens && log.TransferDetails.PayloadType != TransferTokensWithPayload {
-			return errors.New("invalid payload lype")
+			return errors.New("payload type is not a transfer type")
 		}
 	default:
 		return errors.New("invalid transfer log type: unknown")
