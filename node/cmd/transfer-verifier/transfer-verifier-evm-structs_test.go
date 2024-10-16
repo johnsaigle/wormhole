@@ -12,41 +12,41 @@ import (
 )
 
 func TestValidateDeposit(t *testing.T) {
-	t.Parallel() 
+	t.Parallel()
 
 	invalidDeposits := map[string]struct {
-		input    NativeDeposit
+		input NativeDeposit
 	}{
 		"invalid: zero-value for TokenAddress": {
-			input:    NativeDeposit{
-				// TokenAddress: 
+			input: NativeDeposit{
+				// TokenAddress:
 				TokenChain: NATIVE_CHAIN_ID,
-				Receiver: tokenBridgeAddr,
-				Amount: big.NewInt(1),
+				Receiver:   tokenBridgeAddr,
+				Amount:     big.NewInt(1),
 			},
 		},
 		"invalid: zero-value for TokenChain": {
-			input:    NativeDeposit{
+			input: NativeDeposit{
 				TokenAddress: erc20Addr,
-				// TokenChain: 
+				// TokenChain:
 				Receiver: tokenBridgeAddr,
-				Amount: big.NewInt(1),
+				Amount:   big.NewInt(1),
 			},
 		},
 		"invalid: zero-value for Receiver": {
-			input:    NativeDeposit{
+			input: NativeDeposit{
 				TokenAddress: erc20Addr,
-				TokenChain: NATIVE_CHAIN_ID,
+				TokenChain:   NATIVE_CHAIN_ID,
 				// Receiver:
 				Amount: big.NewInt(1),
 			},
 		},
 		"invalid: nil Amount": {
-			input:    NativeDeposit{
+			input: NativeDeposit{
 				TokenAddress: erc20Addr,
-				TokenChain: NATIVE_CHAIN_ID,
-				Receiver: tokenBridgeAddr,
-				Amount: nil,
+				TokenChain:   NATIVE_CHAIN_ID,
+				Receiver:     tokenBridgeAddr,
+				Amount:       nil,
 			},
 		},
 	}
@@ -63,14 +63,14 @@ func TestValidateDeposit(t *testing.T) {
 	}
 
 	validDeposits := map[string]struct {
-		input    NativeDeposit
+		input NativeDeposit
 	}{
 		"valid": {
-			input:    NativeDeposit{
+			input: NativeDeposit{
 				TokenAddress: nativeAddr,
-				TokenChain: NATIVE_CHAIN_ID,
-				Receiver: tokenBridgeAddr,
-				Amount: big.NewInt(500),
+				TokenChain:   NATIVE_CHAIN_ID,
+				Receiver:     tokenBridgeAddr,
+				Amount:       big.NewInt(500),
 			},
 		},
 	}
@@ -86,53 +86,54 @@ func TestValidateDeposit(t *testing.T) {
 		})
 	}
 }
+
 func TestValidateERC20Transfer(t *testing.T) {
-	t.Parallel() 
+	t.Parallel()
 
 	invalidTransfers := map[string]struct {
-		input    ERC20Transfer
+		input ERC20Transfer
 	}{
 		"invalid: zero-value for TokenAddress": {
-			input:    ERC20Transfer{
-				// TokenAddress: 
+			input: ERC20Transfer{
+				// TokenAddress:
 				TokenChain: NATIVE_CHAIN_ID,
-				To: tokenBridgeAddr,
-				From: eoaAddrGeth,
-				Amount: big.NewInt(1),
+				To:         tokenBridgeAddr,
+				From:       eoaAddrGeth,
+				Amount:     big.NewInt(1),
 			},
 		},
 		"invalid: zero-value for TokenChain": {
-			input:    ERC20Transfer{
+			input: ERC20Transfer{
 				TokenAddress: erc20Addr,
-				// TokenChain: 
-				To: tokenBridgeAddr,
-				From: eoaAddrGeth,
+				// TokenChain:
+				To:     tokenBridgeAddr,
+				From:   eoaAddrGeth,
 				Amount: big.NewInt(1),
 			},
 		},
 		"invalid: zero-value for From": {
-			input:    ERC20Transfer{
+			input: ERC20Transfer{
 				TokenAddress: erc20Addr,
-				TokenChain: NATIVE_CHAIN_ID,
+				TokenChain:   NATIVE_CHAIN_ID,
 				// From:
-				To: tokenBridgeAddr,
+				To:     tokenBridgeAddr,
 				Amount: big.NewInt(1),
 			},
 		},
 		"invalid: zero-value for To": {
-			input:    ERC20Transfer{
+			input: ERC20Transfer{
 				TokenAddress: erc20Addr,
-				TokenChain: NATIVE_CHAIN_ID,
-				From: eoaAddrGeth,
+				TokenChain:   NATIVE_CHAIN_ID,
+				From:         eoaAddrGeth,
 				// To:
 				Amount: big.NewInt(1),
 			},
 		},
 		"invalid: nil Amount": {
-			input:    ERC20Transfer{
+			input: ERC20Transfer{
 				TokenAddress: erc20Addr,
-				TokenChain: NATIVE_CHAIN_ID,
-				From: eoaAddrGeth,
+				TokenChain:   NATIVE_CHAIN_ID,
+				From:         eoaAddrGeth,
 				// To:
 				Amount: nil,
 			},
@@ -151,15 +152,15 @@ func TestValidateERC20Transfer(t *testing.T) {
 	}
 
 	validTransfers := map[string]struct {
-		input    ERC20Transfer
+		input ERC20Transfer
 	}{
 		"valid": {
-			input:    ERC20Transfer{
+			input: ERC20Transfer{
 				TokenAddress: erc20Addr,
-				TokenChain: NATIVE_CHAIN_ID,
-				To: tokenBridgeAddr,
-				From: eoaAddrGeth,
-				Amount: big.NewInt(100),
+				TokenChain:   NATIVE_CHAIN_ID,
+				To:           tokenBridgeAddr,
+				From:         eoaAddrGeth,
+				Amount:       big.NewInt(100),
 			},
 		},
 	}
@@ -171,6 +172,207 @@ func TestValidateERC20Transfer(t *testing.T) {
 			t.Log(name)
 
 			err := validate[*ERC20Transfer](&test.input)
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestValidateLogMessagePublished(t *testing.T) {
+	t.Parallel()
+
+	invalidTransfers := map[string]struct {
+		input LogMessagePublished
+	}{
+		"invalid: zero-value for EventEmitter": {
+			input: LogMessagePublished{
+				// EventEmitter: coreBridgeAddr,
+				MsgSender:    tokenBridgeAddr,
+				TransferDetails: &TransferDetails{
+					PayloadType:     TransferTokens,
+					OriginAddressRaw: erc20Addr,
+					TokenChain:      NATIVE_CHAIN_ID,
+					OriginAddress:   eoaAddrGeth,
+					TargetAddress:   eoaAddrVAA,
+					AmountRaw:       big.NewInt(7),
+					Amount:          big.NewInt(7),
+				},
+			},
+		},
+		"invalid: zero-value for MsgSender": {
+			input: LogMessagePublished{
+				EventEmitter: coreBridgeAddr,
+				// MsgSender:    tokenBridgeAddr,
+				TransferDetails: &TransferDetails{
+					PayloadType:     TransferTokens,
+					OriginAddressRaw: erc20Addr,
+					TokenChain:      NATIVE_CHAIN_ID,
+					OriginAddress:   eoaAddrGeth,
+					TargetAddress:   eoaAddrVAA,
+					AmountRaw:       big.NewInt(7),
+					Amount:          big.NewInt(7),
+				},
+			},
+		},
+		"invalid: zero-value for TransferDetails": {
+			input: LogMessagePublished{
+				EventEmitter: coreBridgeAddr,
+				MsgSender:    tokenBridgeAddr,
+				// TransferDetails: &TransferDetails{
+				// 	PayloadType:     TransferTokens,
+				// 	OriginAddressRaw: erc20Addr,
+				// 	TokenChain:      NATIVE_CHAIN_ID,
+				// 	OriginAddress:   eoaAddrGeth,
+				// 	TargetAddress:   eoaAddrVAA,
+				// 	AmountRaw:       big.NewInt(7),
+				// 	Amount:          big.NewInt(7),
+				// },
+			},
+		},
+		"invalid: zero-value for PayloadType": {
+			input: LogMessagePublished{
+				EventEmitter: coreBridgeAddr,
+				MsgSender:    tokenBridgeAddr,
+				TransferDetails: &TransferDetails{
+					// PayloadType:     TransferTokens,
+					OriginAddressRaw: erc20Addr,
+					TokenChain:      NATIVE_CHAIN_ID,
+					OriginAddress:   eoaAddrGeth,
+					TargetAddress:   eoaAddrVAA,
+					AmountRaw:       big.NewInt(7),
+					Amount:          big.NewInt(7),
+				},
+			},
+		},
+		"invalid: zero-value for OriginAddressRaw": {
+			input: LogMessagePublished{
+				EventEmitter: coreBridgeAddr,
+				MsgSender:    tokenBridgeAddr,
+				TransferDetails: &TransferDetails{
+					PayloadType:     TransferTokens,
+					// OriginAddressRaw: erc20Addr,
+					TokenChain:      NATIVE_CHAIN_ID,
+					OriginAddress:   eoaAddrGeth,
+					TargetAddress:   eoaAddrVAA,
+					AmountRaw:       big.NewInt(7),
+					Amount:          big.NewInt(7),
+				},
+			},
+		},
+		"invalid: zero-value for TokenChain": {
+			input: LogMessagePublished{
+				EventEmitter: coreBridgeAddr,
+				MsgSender:    tokenBridgeAddr,
+				TransferDetails: &TransferDetails{
+					PayloadType:     TransferTokens,
+					OriginAddressRaw: erc20Addr,
+					// TokenChain:      NATIVE_CHAIN_ID,
+					OriginAddress:   eoaAddrGeth,
+					TargetAddress:   eoaAddrVAA,
+					AmountRaw:       big.NewInt(7),
+					Amount:          big.NewInt(7),
+				},
+			},
+		},
+		"invalid: zero-value for OriginAddress": {
+			input: LogMessagePublished{
+				EventEmitter: coreBridgeAddr,
+				MsgSender:    tokenBridgeAddr,
+				TransferDetails: &TransferDetails{
+					PayloadType:     TransferTokens,
+					OriginAddressRaw: erc20Addr,
+					TokenChain:      NATIVE_CHAIN_ID,
+					// OriginAddress:   eoaAddrGeth,
+					TargetAddress:   eoaAddrVAA,
+					AmountRaw:       big.NewInt(7),
+					Amount:          big.NewInt(7),
+				},
+			},
+		},
+		"invalid: zero-value for TargetAddress": {
+			input: LogMessagePublished{
+				EventEmitter: coreBridgeAddr,
+				MsgSender:    tokenBridgeAddr,
+				TransferDetails: &TransferDetails{
+					PayloadType:     TransferTokens,
+					OriginAddressRaw: erc20Addr,
+					TokenChain:      NATIVE_CHAIN_ID,
+					OriginAddress:   eoaAddrGeth,
+					// TargetAddress:   eoaAddrVAA,
+					AmountRaw:       big.NewInt(7),
+					Amount:          big.NewInt(7),
+				},
+			},
+		},
+		"invalid: zero-value for AmountRaw": {
+			input: LogMessagePublished{
+				EventEmitter: coreBridgeAddr,
+				MsgSender:    tokenBridgeAddr,
+				TransferDetails: &TransferDetails{
+					PayloadType:     TransferTokens,
+					OriginAddressRaw: erc20Addr,
+					TokenChain:      NATIVE_CHAIN_ID,
+					OriginAddress:   eoaAddrGeth,
+					TargetAddress:   eoaAddrVAA,
+					// AmountRaw:       big.NewInt(7),
+					Amount:          big.NewInt(7),
+				},
+			},
+		},
+		"invalid: zero-value for Amount": {
+			input: LogMessagePublished{
+				EventEmitter: coreBridgeAddr,
+				MsgSender:    tokenBridgeAddr,
+				TransferDetails: &TransferDetails{
+					PayloadType:     TransferTokens,
+					OriginAddressRaw: erc20Addr,
+					TokenChain:      NATIVE_CHAIN_ID,
+					OriginAddress:   eoaAddrGeth,
+					TargetAddress:   eoaAddrVAA,
+					AmountRaw:       big.NewInt(7),
+					// Amount:          big.NewInt(7),
+				},
+			},
+		},
+	}
+
+	for name, test := range invalidTransfers {
+		test := test // NOTE: uncomment for Go < 1.22, see /doc/faq#closures_and_goroutines
+		t.Run(name, func(t *testing.T) {
+			t.Parallel() // marks each test case as capable of running in parallel with each other
+			t.Log(name)
+
+			err := validate[*LogMessagePublished](&test.input)
+			require.Error(t, err)
+		})
+	}
+
+	validTransfers := map[string]struct {
+		input LogMessagePublished
+	}{
+		"valid": {
+			input: LogMessagePublished{
+				EventEmitter: coreBridgeAddr,
+				MsgSender:    tokenBridgeAddr,
+				TransferDetails: &TransferDetails{
+					PayloadType:     TransferTokens,
+					OriginAddressRaw: erc20Addr,
+					TokenChain:      NATIVE_CHAIN_ID,
+					OriginAddress:   eoaAddrGeth,
+					TargetAddress:   eoaAddrVAA,
+					AmountRaw:       big.NewInt(7),
+					Amount:          big.NewInt(7),
+				},
+			},
+		},
+	}
+
+	for name, test := range validTransfers {
+		test := test // NOTE: uncomment for Go < 1.22, see /doc/faq#closures_and_goroutines
+		t.Run(name, func(t *testing.T) {
+			t.Parallel() // marks each test case as capable of running in parallel with each other
+			t.Log(name)
+
+			err := validate[*LogMessagePublished](&test.input)
 			require.NoError(t, err)
 		})
 	}

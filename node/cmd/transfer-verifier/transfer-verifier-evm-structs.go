@@ -186,8 +186,11 @@ type LogMessagePublished struct {
 	// Note: these fields are non-exhaustive. Data not needed for Transfer Verification is not encoded here.
 }
 
-func (l *LogMessagePublished) Destination() vaa.Address {
-	return l.TransferDetails.TargetAddress
+func (l *LogMessagePublished) Destination() (destination vaa.Address) {
+	if l.TransferDetails != nil {
+		destination = l.TransferDetails.TargetAddress
+	} 
+	return
 }
 
 func (l *LogMessagePublished) Emitter() common.Address {
@@ -198,16 +201,25 @@ func (l *LogMessagePublished) Sender() vaa.Address {
 	return VAAAddrFrom(l.MsgSender)
 }
 
-func (l *LogMessagePublished) TransferAmount() *big.Int {
-	return l.TransferDetails.Amount
+func (l *LogMessagePublished) TransferAmount() (amount *big.Int) {
+	if l.TransferDetails != nil {
+		return l.TransferDetails.Amount
+	} 
+	return
 }
 
-func (l *LogMessagePublished) OriginAddress() vaa.Address {
-	return VAAAddrFrom(l.TransferDetails.OriginAddress)
+func (l *LogMessagePublished) OriginAddress() (origin vaa.Address) {
+	if l.TransferDetails != nil {
+		origin = VAAAddrFrom(l.TransferDetails.OriginAddress)
+	} 
+	return
 }
 
-func (l *LogMessagePublished) OriginChain() vaa.ChainID {
-	return l.TransferDetails.TokenChain
+func (l *LogMessagePublished) OriginChain() (chainID vaa.ChainID) {
+	if l.TransferDetails != nil {
+		chainID = l.TransferDetails.TokenChain
+	} 
+	return
 }
 
 // Abstraction over an EVM transaction receipt for Token Bridge transfer.
@@ -230,7 +242,7 @@ const (
 type TransferDetails struct {
 	PayloadType VAAPayloadType
 	// Raw token address parsed from the payload. May be wrapped.
-	TokenAddressRaw common.Address
+	OriginAddressRaw common.Address
 	TokenChain      vaa.ChainID
 	// Original address of the token when minted natively. Corresponds to the "unwrapped" address in the token bridge.
 	OriginAddress common.Address
@@ -313,8 +325,23 @@ func relevant[L TransferLog](tLog TransferLog, tv *TVAddresses) (key string, rel
 	return fmt.Sprintf(KEY_FORMAT, tLog.OriginAddress(), tLog.OriginChain()), true
 }
 
+// validate() ensures a TransferLog is well-formed. This means that its fields are not nil and in most cases are not
+// equal to the zero-value for the field's type.
 func validate[L TransferLog](tLog TransferLog) (err error) {
-	// Whether to skip this event because it doesn't matter for the purposes of Transfer Verification
+
+	if cmp(tLog.Emitter(), ZERO_ADDRESS) == 0 {
+		return errors.New("emitter is the zero address")
+	}
+
+	// TODO: Move string check for vaa unknown here
+	if tLog.OriginChain() == 0 {
+		return errors.New("originChain is 0")
+	}
+
+	if cmp(tLog.OriginAddress(), ZERO_ADDRESS_VAA) == 0 {
+		return errors.New("originAddress is the zero address")
+	}
+
 	if tLog.TransferAmount() == nil {
 		return errors.New("transfer amount is nil")
 	}
@@ -323,14 +350,6 @@ func validate[L TransferLog](tLog TransferLog) (err error) {
 		return errors.New("destination is not set")
 	}
 
-	if cmp(tLog.OriginAddress(), ZERO_ADDRESS_VAA) == 0 {
-		return errors.New("originAddress is the zero address")
-	}
-
-	// TODO: Move string check for vaa unknown here
-	if tLog.OriginChain() == 0 {
-		return errors.New("originChain is 0")
-	}
 
 	switch log := tLog.(type) {
 	case *NativeDeposit:
@@ -353,6 +372,23 @@ func validate[L TransferLog](tLog TransferLog) (err error) {
 		// Transfers and LogMessagePublished cannot have a sender with a 0 address
 		if cmp(log.Sender(), ZERO_ADDRESS_VAA) == 0 {
 			return errors.New("sender cannot be zero")
+		}
+		if cmp(log.OriginAddress(), ZERO_ADDRESS_VAA) == 0 {
+			return errors.New("origin cannot be zero")
+		}
+
+		// The following values are not exposed by the interface, so check them directly here.
+		if log.TransferDetails == nil {
+			return errors.New("TransferDetails cannot be nil")
+		}
+		if cmp(log.TransferDetails.OriginAddressRaw, ZERO_ADDRESS_VAA) == 0 {
+			return errors.New("origin address raw cannot be zero")
+		}
+		if log.TransferDetails.AmountRaw == nil {
+			return errors.New("amountRaw cannot be nil")
+		}
+		if log.TransferDetails.PayloadType != TransferTokens && log.TransferDetails.PayloadType != TransferTokensWithPayload {
+			return errors.New("invalid payload lype")
 		}
 	default:
 		return errors.New("invalid transfer log type: unknown")
@@ -386,8 +422,9 @@ func (tv *TransferVerifier[evmClient, connector]) getDecimals(
 
 	result, err := tv.client.CallContract(ctx, ethCallMsg, nil)
 	if err != nil || len(result) < EVM_WORD_LENGTH {
-		tv.logger.Fatal("failed to get decimals for token",
+		tv.logger.Warn("failed to get decimals for token",
 			zap.String("tokenAddress", tokenAddress.String()),
+			zap.ByteString("result", result),
 			zap.Error(err))
 		return 0, err
 	}
