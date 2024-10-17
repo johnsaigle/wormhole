@@ -139,6 +139,17 @@ func (d *NativeDeposit) OriginAddress() vaa.Address {
 	return VAAAddrFrom(d.TokenAddress)
 }
 
+func (d *NativeDeposit) String() string {
+	return fmt.Sprintf(
+		"Deposit: {TokenAddress=%s TokenChain=%d Receiver=%s Amount=%s}",
+		d.TokenAddress.String(),
+		d.TokenChain,
+		d.Receiver.String(),
+		d.Amount.String(),
+		)
+}
+
+
 // Abstraction over an ERC20 Transfer event.
 type ERC20Transfer struct {
 	// The address of the token. Also equivalent to the Emitter of the event.
@@ -149,6 +160,7 @@ type ERC20Transfer struct {
 	To         common.Address
 	Amount     *big.Int
 }
+
 
 func (t *ERC20Transfer) TransferAmount() *big.Int {
 	return t.Amount
@@ -175,7 +187,19 @@ func (t *ERC20Transfer) OriginAddress() vaa.Address {
 	return VAAAddrFrom(t.TokenAddress)
 }
 
+func (t *ERC20Transfer) String() string {
+	return fmt.Sprintf(
+		"ERC20Transfer: {TokenAddress=%s TokenChain=%d From=%s To=%s Amount=%s}",
+		t.TokenAddress.String(),
+		t.TokenChain,
+		t.From.String(),
+		t.To.String(),
+		t.Amount.String(),
+		)
+}
+
 // Abstraction over a LogMessagePublished event emitted by the core bridge.
+// TODO add String() method 
 type LogMessagePublished struct {
 	// Which contract emitted the event.
 	EventEmitter common.Address
@@ -222,7 +246,10 @@ func (l *LogMessagePublished) OriginChain() (chainID vaa.ChainID) {
 	return
 }
 
-// Abstraction over an EVM transaction receipt for Token Bridge transfer.
+// TransferReceipt is an abstraction over an EVM transaction receipt for a Token Bridge transfer. It represents
+// Deposit, Transfer, and LogMessagePublished events that can appear in a Receipt logs. Other event types are not
+// represented by this program because they are not relevant for checking the invariants on transfers sent from the
+// token bridge.
 type TransferReceipt struct {
 	Deposits  *[]*NativeDeposit
 	Transfers *[]*ERC20Transfer
@@ -300,6 +327,8 @@ func (tv *TransferVerifier[ethClient, connector]) unwrapIfWrapped(
 
 	result, err := tv.client.CallContract(ctx, ethCallMsg, nil)
 	if err != nil {
+		// This strictly handles the error case. The contract call will return the zero address for assets
+		// not in its map.
 		return common.Address{}, fmtString.Errorf("failed to get mapping for token %s", tokenAddressAsKey)
 	}
 
@@ -309,7 +338,7 @@ func (tv *TransferVerifier[ethClient, connector]) unwrapIfWrapped(
 	return tokenAddressNative, nil
 }
 
-// Remove irrelevant logs from consideration. Returns a string of the form "address-chain" for relevant entries
+// Determine whether a log is relevant for the addresses passed into TVAddresses. Returns a string of the form "address-chain" for relevant entries.
 func relevant[L TransferLog](tLog TransferLog, tv *TVAddresses) (key string, relevant bool) {
 
 	switch log := tLog.(type) {
@@ -364,9 +393,6 @@ func validate[L TransferLog](tLog TransferLog) error {
 		return &InvalidLogError{Msg: "originChain is zero"}
 	}
 
-	// if cmp(tLog.OriginAddress(), ZERO_ADDRESS_VAA) == 0 {
-	// 	return errors.New("originAddress is the zero address")
-	// }
 
 	if tLog.TransferAmount() == nil {
 		return &InvalidLogError{Msg: "transfer amount is nil"}
@@ -381,13 +407,16 @@ func validate[L TransferLog](tLog TransferLog) error {
 	case *NativeDeposit:
 		// Deposit does not actually have a sender, so it should always be equal to the zero address.
 		if cmp(log.Sender(), ZERO_ADDRESS_VAA) != 0 {
-			return &InvalidLogError{Msg: "invalid log: sender address for Deposit must be 0"}
+			return &InvalidLogError{Msg: "sender address for Deposit must be 0"}
 		}
 		if cmp(log.Emitter(), log.TokenAddress) != 0 {
-			return &InvalidLogError{Msg: "invalid log: deposit emitter is not equal to its token address"}
+			return &InvalidLogError{Msg: "deposit emitter is not equal to its token address"}
 		}
 		if cmp(log.Destination(), ZERO_ADDRESS_VAA) == 0 {
-			return &InvalidLogError{Msg: "invalid log: destination is not set"}
+			return &InvalidLogError{Msg: "destination is not set"}
+		}
+		if cmp(log.OriginAddress(), ZERO_ADDRESS_VAA) == 0 {
+			return &InvalidLogError{Msg: "originAddress is the zero address"}
 		}
 	case *ERC20Transfer:
 		// Note: The token bridge transfers to the zero address in order to burn tokens for some kinds of
@@ -395,18 +424,21 @@ func validate[L TransferLog](tLog TransferLog) error {
 
 		// Transfers and LogMessagePublished cannot have a sender with a 0 address
 		if cmp(log.Sender(), ZERO_ADDRESS_VAA) == 0 {
-			return &InvalidLogError{Msg: "invalid log: sender cannot be zero"}
+			return &InvalidLogError{Msg: "sender cannot be zero"}
 		}
 		if cmp(log.Emitter(), log.TokenAddress) != 0 {
-			return &InvalidLogError{Msg: "invalid log: deposit emitter is not equal to its token address"}
+			return &InvalidLogError{Msg: "deposit emitter is not equal to its token address"}
+		}
+		if cmp(log.OriginAddress(), ZERO_ADDRESS_VAA) == 0 {
+			return &InvalidLogError{Msg: "originAddress is the zero address"}
 		}
 	case *LogMessagePublished:
 		// Transfers and LogMessagePublished cannot have a sender with a 0 address
 		if cmp(log.Sender(), ZERO_ADDRESS_VAA) == 0 {
-			return &InvalidLogError{Msg: "invalid log: sender cannot be zero"}
+			return &InvalidLogError{Msg: "sender cannot be zero"}
 		}
 		if cmp(log.Destination(), ZERO_ADDRESS_VAA) == 0 {
-			return &InvalidLogError{Msg: "invalid log: destination is not set"}
+			return &InvalidLogError{Msg: "destination is not set"}
 		}
 
 		// TODO is this valid for assets that return the zero address from unwrap?
@@ -416,25 +448,25 @@ func validate[L TransferLog](tLog TransferLog) error {
 
 		// The following values are not exposed by the interface, so check them directly here.
 		if log.TransferDetails == nil {
-			return &InvalidLogError{Msg: "invalid log: TransferDetails cannot be nil"}
+			return &InvalidLogError{Msg: "TransferDetails cannot be nil"}
 		}
 		if cmp(log.TransferDetails.TargetAddress, ZERO_ADDRESS_VAA) == 0 {
-			return &InvalidLogError{Msg: "invalid log: target address cannot be zero"}
+			return &InvalidLogError{Msg: "target address cannot be zero"}
 		}
 		if cmp(log.TransferDetails.OriginAddressRaw, ZERO_ADDRESS_VAA) == 0 {
-			return &InvalidLogError{Msg: "invalid log: origin address raw cannot be zero"}
+			return &InvalidLogError{Msg: "origin address raw cannot be zero"}
 		}
 		if log.TransferDetails.AmountRaw == nil {
-			return &InvalidLogError{Msg: "invalid log: amountRaw cannot be nil"}
+			return &InvalidLogError{Msg: "amountRaw cannot be nil"}
 		}
 		if log.TransferDetails.AmountRaw.Sign() == -1 {
-			return &InvalidLogError{Msg: "invalid log: amountRaw cannot be negative"}
+			return &InvalidLogError{Msg: "amountRaw cannot be negative"}
 		}
 		if log.TransferDetails.PayloadType != TransferTokens && log.TransferDetails.PayloadType != TransferTokensWithPayload {
-			return &InvalidLogError{Msg: "invalid log: payload type is not a transfer type"}
+			return &InvalidLogError{Msg: "payload type is not a transfer type"}
 		}
 	default:
-		return &InvalidLogError{Msg: "invalid log: invalid transfer log type: unknown"}
+		return &InvalidLogError{Msg: "invalid transfer log type: unknown"}
 	}
 
 	return nil
@@ -500,10 +532,10 @@ type Bytes interface {
 	Bytes() []byte
 }
 
-// Utility method for comparing common.Address and vaa.Address at the byte level. Under the hood, they are both 32 byte
-// values.
+// Utility method for comparing common.Address and vaa.Address at the byte level.
 func cmp[some Bytes, other Bytes](a some, b other) int {
 
+	// Compare bytes, prepending 0s to ensure that both values are of EVM_WORD_LENGTH.
 	return bytes.Compare(
 		common.LeftPadBytes(a.Bytes(), EVM_WORD_LENGTH),
 		common.LeftPadBytes(b.Bytes(), EVM_WORD_LENGTH),

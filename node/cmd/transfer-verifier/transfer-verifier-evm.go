@@ -1,9 +1,9 @@
 package transferverifier
 
 // TODOs
-//	tests
+//	add comments at the top of this file
 //	fix up contexts where it makes sense
-//	improve error propogation
+//	allow the connector to reconnect after an error
 
 import (
 	// "bytes"
@@ -24,21 +24,18 @@ import (
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 
-	// transferverifier "github.com/certusone/wormhole/node/cmd/transfer-verifier"
 	connectors "github.com/certusone/wormhole/node/pkg/watchers/evm/connectors"
 	"github.com/certusone/wormhole/node/pkg/watchers/evm/connectors/ethabi"
 )
 
-// Global variables
+// Global variables for caching RPC responses.
 var (
 	// Holds previously-recorded decimals (uint8) for token addresses (common.Address)
 	// that have been observed.
-	// TODO: Add common coins (USDC, USDT, etc.) in compilation. No need to fetch these.
 	decimalsCache = make(map[common.Address]uint8)
 
 	// Maps the 32-byte token addresses received via LogMessagePublished events to their
 	// unwrapped 20-byte addresses. This mapping is also used for non-wrapped token addresses.
-	// TODO: Add common coins (USDC, USDT, etc.) in compilation. No need to fetch these.
 	wrappedCache = make(map[string]common.Address)
 )
 
@@ -58,7 +55,8 @@ var (
 )
 
 const (
-	// Maximum number of attempts to establish a subscription to the LogMessagePublished event emitted by the core contract..
+	// Maximum number of attempts to establish a subscription to the LogMessagePublished event emitted by the core contract.
+	// TODO: this could be a CLI parameter
 	MAX_RETRIES = 5
 )
 
@@ -143,7 +141,8 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 	logC := make(chan *ethabi.AbiLogMessagePublished)
 	errC := make(chan error)
 
-	sub, err := tryConnect(ethConnector, logC, errC, transferVerifier.logger)
+	sub, _, err := tryConnect(ctx, ethConnector, logC, transferVerifier.logger)
+	defer sub.Unsubscribe()
 
 	if err != nil {
 		logger.Fatal("Error on WatchLogMessagePublished",
@@ -155,13 +154,13 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 
 	logger.Debug("evm rpc subscription created", zap.String("address", transferVerifier.Addresses.CoreBridgeAddr.String()))
 
-	// Counter for amount of logs processed
+	// Counter for amount of logs processed.
 	countLogsProcessed := int(0)
 
-	// Mapping to track the transactions that have been processed
+	// Mapping to track the transactions that have been processed.
 	processedTransactions := make(map[common.Hash]*types.Receipt)
 
-	// The latest transaction block number, used to determine the size of historic receipts to keep in memory
+	// The latest transaction block number, used to determine the size of historic receipts to keep in memory.
 	lastBlockNumber := uint64(0)
 
 	// Ticker to clear historic transactions that have been processed
@@ -176,15 +175,22 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 		select {
 		case err := <-sub.Err():
 			logger.Warn("got error on ethConnector's error channel", zap.Error(err))
+			errC <- fmt.Errorf("error while processing message publication subscription: %w", err)
+
+			// TODO: Reconnection doesn't work right now.
 			// TODO: do we need to overwrite sub? any risk?
-			_, connectErr := tryConnect(ethConnector, logC, errC, transferVerifier.logger)
+			newSub, newErrC, connectErr := tryConnect(ctx, ethConnector, logC, transferVerifier.logger)
 			if connectErr != nil {
+				ctxCancel()
 				logger.Fatal("Could not reconnect. Terminating", zap.Error(err))
 			}
-		// Do cleanup and statistics reporting
+			// not sure if this is valid
+			sub = newSub
+			errC = newErrC
+		// Do cleanup and statistics reporting.
 		case <-ticker.C:
 
-			// Basic liveness report and statistics
+			// Basic liveness report and statistics.
 			logger.Info("total logs processed:", zap.Int("count", countLogsProcessed))
 
 			// Prune the cache of processed receipts
@@ -234,7 +240,7 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 			lastBlockNumber = receipt.BlockNumber.Uint64()
 			processedTransactions[vLog.Raw.TxHash] = receipt
 
-			// parse raw transaction receipt into high-level struct containing transfer details
+			// Parse raw transaction receipt into high-level struct containing transfer details.
 			transferReceipt, err := transferVerifier.ParseReceipt(receipt)
 			if err != nil || transferReceipt == nil {
 				logger.Warn("error when parsing receipt. skipping validation",
@@ -243,7 +249,8 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 				continue
 			}
 
-			// post-processing: populate wormhole-specific data for transfer details
+			// Post-processing: populate wormhole-specific data for transfer details. This is done as a separate
+			// step so that RPC calls are done independently of parsing code, which facilitates testing.
 			for _, message := range *transferReceipt.MessagePublicatons {
 				logger.Debug("populating wormhole data")
 				newDetails, err := transferVerifier.addWormholeDetails(message.TransferDetails)
@@ -278,11 +285,11 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 }
 
 func tryConnect[C connectors.Connector](
+	ctx context.Context,
 	connector C,
 	logC chan *ethabi.AbiLogMessagePublished,
-	errC chan error,
 	logger zap.Logger,
-) (sub event.Subscription, err error) {
+) (newSub event.Subscription, newErrC chan error, err error) {
 	attempts := 0
 	for attempts < MAX_RETRIES {
 		attempts++
@@ -290,17 +297,20 @@ func tryConnect[C connectors.Connector](
 			zap.Int("connection attempt", attempts),
 			zap.Int("max retries", MAX_RETRIES))
 
-		sub, err = connector.WatchLogMessagePublished(
-			context.Background(),
-			errC,
+		// Make a connection using a new error channel. Otherwise, if the old one is used and an error persists,
+		// the main program loop will infinitely recurse into this function.
+		newSub, err = connector.WatchLogMessagePublished(
+			ctx,
+			newErrC,
 			logC,
 		)
+
 		if err != nil {
 			logger.Warn("Could not establish connection",
 				zap.Error(err))
 			continue
 		}
-		if sub == nil {
+		if newSub == nil {
 			logger.Warn("Could not establish connection: nil event subscription")
 			continue
 		}
@@ -310,7 +320,7 @@ func tryConnect[C connectors.Connector](
 	return
 }
 
-// ParseReceipt() converts a go-ethereum receipt struct into a TransferReceipt. It makes use of the ethConnector to
+// ParseReceipt converts a go-ethereum receipt struct into a TransferReceipt. It makes use of the ethConnector to
 // parse information from the logs within the receipt. This function is mainly helpful to isolate the
 // parsing code from the verification logic, which makes the latter easier to test without needing an active
 // RPC connection.
@@ -363,22 +373,23 @@ func (tv *TransferVerifier[evmClient, connector]) ParseReceipt(
 				continue
 			}
 
-			// Payload parsing will fail if performed on a message emitted from another contract or sent
+			// This check is required. Payload parsing will fail if performed on a message emitted from another contract or sent
 			// by a contract other than the token bridge
 			if log.Address != tv.Addresses.CoreBridgeAddr {
-				tv.logger.Debug("skipping LogMessagePublished not emitted from the core bridge",
+				tv.logger.Debug("skip: LogMessagePublished not emitted from the core bridge",
 					zap.String("emitter", log.Address.String()))
 				continue
 			}
 
 			if log.Topics[1] != tv.Addresses.TokenBridgeAddr.Hash() {
-				tv.logger.Debug("skipping LogMessagePublished with sender not equal to the token bridge",
+				tv.logger.Debug("skip: LogMessagePublished with sender not equal to the token bridge",
 					zap.String("sender", log.Topics[1].String()),
 					zap.String("tokenBridgeAddr", tv.Addresses.TokenBridgeAddr.Hex()),
 				)
 				continue
 			}
 
+			// Validation is complete. Now, parse the raw bytes of the payload into a TransferDetails instance.
 			transferDetails, err := parseLogMessagePublishedPayload(logMessagePublished.Payload)
 			if err != nil {
 				return nil, err
@@ -395,6 +406,7 @@ func (tv *TransferVerifier[evmClient, connector]) ParseReceipt(
 	return &TransferReceipt{Deposits: &deposits, Transfers: &transfers, MessagePublicatons: &messagePublications}, nil
 }
 
+// Custom error type used to signal that a core invariant of the token bridge has been violated.
 type InvariantError struct {
 	Msg string
 }
@@ -403,19 +415,19 @@ func (i InvariantError) Error() string {
 	return fmt.Sprintf("invariant violated: %s", i.Msg)
 }
 
-// ProcessReceipt() verifies that a receipt for a LogMessagedPublished event does not verify a fundamental
+// ProcessReceipt verifies that a receipt for a LogMessagedPublished event does not verify a fundamental
 // invariant of Wormhole token transfers: when the core bridge reports a transfer has occurred, there must be a
 // corresponding transfer in the token bridge. This is determined by iterating through the logs of the receipt and
 // ensuring that the sum transferred into the token bridge does not exceed the sum emitted by the core bridge.
 func (tv *TransferVerifier[evmClient, connector]) ProcessReceipt(
 	transferReceipt *TransferReceipt,
-) (numProcessed int, err error) {
+) (logsProcessed int, err error) {
 	if transferReceipt == nil {
-		tv.logger.Warn("transfer receipt is nil. Skipping transfer verification")
+		tv.logger.Warn("transfer receipt is nil. Cannot perform transfer verification")
 		return 0, errors.New("got nil transfer receipt")
 	}
 	if len(*transferReceipt.MessagePublicatons) == 0 {
-		tv.logger.Warn("transfer receipt contained no LogMessagePublished events")
+		tv.logger.Warn("transfer receipt contained no LogMessagePublished events. Cannot perform transfer verification")
 		return 0, errors.New("no message publications in receipt")
 	}
 
@@ -424,22 +436,24 @@ func (tv *TransferVerifier[evmClient, connector]) ProcessReceipt(
 	// The sum of tokens parsed from the core bridge's LogMessagePublished payload.
 	requestedOutOfBridge := make(map[string]*big.Int)
 
+	// Validate NativeDeposits
 	for _, deposit := range *transferReceipt.Deposits {
 
 		err := validate[*NativeDeposit](deposit)
 		if err != nil {
-			return numProcessed, err
+			return logsProcessed, err
 		}
 
 		key, relevant := relevant[*NativeDeposit](deposit, &tv.Addresses)
 		if !relevant {
-			tv.logger.Debug("skipping irrelevant deposit",
+			tv.logger.Debug("skip: irrelevant deposit",
 				zap.String("emitter", deposit.Emitter().String()),
+				zap.String("deposit", deposit.String()),
 			)
 			continue
 		}
 		if key == "" {
-			return numProcessed, errors.New("Couldn't get key")
+			return logsProcessed, errors.New("Couldn't get key")
 		}
 
 		upsert(&transferredIntoBridge, key, deposit.TransferAmount())
@@ -449,41 +463,54 @@ func (tv *TransferVerifier[evmClient, connector]) ProcessReceipt(
 			zap.String("amount", deposit.Amount.String()))
 	}
 
+	// Validate ERC20Transfers
 	for _, transfer := range *transferReceipt.Transfers {
 		err := validate[*ERC20Transfer](transfer)
 		if err != nil {
-			return numProcessed, err
+			return logsProcessed, err
 		}
+
 		key, relevant := relevant[*ERC20Transfer](transfer, &tv.Addresses)
 		if !relevant {
-			tv.logger.Debug("skipping irrelevant transfer")
+			tv.logger.Debug("skipping irrelevant transfer",
+				zap.String("emitter", transfer.Emitter().String()),
+				zap.String("erc20Transfer", transfer.String()))
 			continue
 		}
 		if key == "" {
-			return numProcessed, errors.New("Couldn't get key")
+			return logsProcessed, errors.New("Couldn't get key")
 		}
+
 		upsert(&transferredIntoBridge, key, transfer.TransferAmount())
+
+		tv.logger.Debug("a transfer into the token bridge was recorded",
+			zap.String("tokenAddress", transfer.TokenAddress.String()),
+			zap.String("amount", transfer.Amount.String()))
 	}
 
+	// Validate LogMessagePublished events.
 	for _, message := range *transferReceipt.MessagePublicatons {
 		td := message.TransferDetails
 
 		err := validate[*LogMessagePublished](message)
 		if err != nil {
-			return numProcessed, err
+			return logsProcessed, err
 		}
+
 		key, relevant := relevant[*LogMessagePublished](message, &tv.Addresses)
 		if !relevant {
-			tv.logger.Debug("skipping irrelevant message publication")
+			tv.logger.Debug("skip: irrelevant LogMessagePublished event")
 			continue
 		}
+
 		upsert(&requestedOutOfBridge, key, message.TransferAmount())
 
 		tv.logger.Debug("successfully parsed a LogMessagePublished event payload",
 			zap.String("tokenAddress", td.OriginAddress.String()),
 			zap.String("tokenChain", td.TokenChain.String()),
 			zap.String("amount", td.Amount.String()))
-		numProcessed++
+
+		logsProcessed++
 	}
 
 	// TODO: Revisit error handling here. Are errors enough or should we do Fatal?
@@ -492,7 +519,7 @@ func (tv *TransferVerifier[evmClient, connector]) ProcessReceipt(
 			tv.logger.Error("transfer-out request for tokens that were never deposited",
 				zap.String("key", key))
 			// TODO: Is it better to return or continue here?
-			return numProcessed, &InvariantError{Msg:"transfer-out request for tokens that were never deposited"}
+			return logsProcessed, &InvariantError{Msg: "transfer-out request for tokens that were never deposited"}
 		}
 
 		amountIn := transferredIntoBridge[key]
@@ -504,16 +531,16 @@ func (tv *TransferVerifier[evmClient, connector]) ProcessReceipt(
 
 		if amountOut.Cmp(amountIn) > 0 {
 			tv.logger.Error("requested amount out is larger than amount in")
-			return numProcessed, &InvariantError{Msg:"requested amount out is larger than amount in"}
+			return logsProcessed, &InvariantError{Msg: "requested amount out is larger than amount in"}
 		}
 	}
 
-	// TODO: Return amount in and amount out. Maybe best to create a new map of keys to amount in and out and 
+	// TODO: Return amount in and amount out. Maybe best to create a new map of keys to amount in and out and
 	// return this for further processing. This would make it easier to do unit tests against the math also
 	// TODO: Add an info or Warn level log when amountIn is greater than amountOut. Normally they should be equal.
 	// It indicates an unusual transfer or else a bug in the program
 
-	return numProcessed, nil
+	return logsProcessed, nil
 }
 
 func parseERC20TransferEvent(logTopics []common.Hash, logData []byte) (from common.Address, to common.Address, amount *big.Int) {
@@ -546,7 +573,7 @@ func parseWNativeDepositEvent(logTopics []common.Hash, logData []byte) (destinat
 	return destination, amount
 }
 
-// parseLogMessagePublishedPayload() parses the details of a transfer from a LogMessagePublished event's Payload field.
+// parseLogMessagePublishedPayload parses the details of a transfer from a LogMessagePublished event's Payload field.
 func parseLogMessagePublishedPayload(
 	// Corresponds to LogMessagePublished.Payload as returned by the ABI parsing operation in the ethConnector.
 	data []byte,
@@ -573,37 +600,53 @@ func parseLogMessagePublishedPayload(
 		Amount:        nil,
 		OriginAddress: common.Address{},
 	}, nil
-
 }
 
 // addWormholeDetails() makes requests to the token bridge and token contract to get detailed, wormhole-specific information about
 // a transfer. Modifies parameter `details` as a side-effect
 func (tv *TransferVerifier[ethClient, connector]) addWormholeDetails(details *TransferDetails) (newDetails *TransferDetails, err error) {
 
+	// Fetch the token's decimals and update TransferDetails with the denormalized amount.
 	decimals, err := tv.getDecimals(details.OriginAddressRaw)
 	if err != nil {
 		return
 	}
 	denormalized := denormalize(details.AmountRaw, decimals)
 
+
+	// If the token was minted on the chain monitored by this program, set its OriginAddress equal to OriginAddressRaw.
 	var originAddress common.Address
 	if details.TokenChain == NATIVE_CHAIN_ID {
 		originAddress = common.BytesToAddress(details.OriginAddressRaw.Bytes())
-	} else {
-		originAddress, err = tv.unwrapIfWrapped(details.OriginAddressRaw.Bytes(), details.TokenChain)
-	}
+		newDetails = details
+		newDetails.OriginAddress = originAddress
+		newDetails.Amount = denormalized
+		return newDetails, nil
+	} 
+
+	// If the token was minted on another chain, try to unwrap it. 
+	unwrappedAddress, err := tv.unwrapIfWrapped(details.OriginAddressRaw.Bytes(), details.TokenChain)
 	if err != nil {
 		return
 	}
 
-	// TODO: It's probably better to modify the argument in-place rather than return new values
+	// If the unwrap function returns the zero address, that means it has no knowledge of this token. In this case
+	// set the OriginAddress to OriginAddressRaw rather than to the zero address. The program will still be able
+	// to know that this is a non-native address by examining the chain ID.
+	if cmp(unwrappedAddress, ZERO_ADDRESS) == 0 {
+		originAddress = common.BytesToAddress(details.OriginAddressRaw.Bytes())
+	} else {
+		originAddress = unwrappedAddress
+	}
+
+	// TODO it would be better to update the parameter directly rather than pass the values here.
 	newDetails = details
 	newDetails.OriginAddress = originAddress
 	newDetails.Amount = denormalized
 	return newDetails, nil
 }
 
-// Insert a value into a map or update it if it already exists.
+// upsert inserts a new key and value into a map or update the value if the key already exists.
 func upsert(
 	dict *map[string]*big.Int,
 	key string,
