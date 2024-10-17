@@ -500,6 +500,11 @@ func (tv *TransferVerifier[evmClient, connector]) ProcessReceipt(
 		}
 	}
 
+	// TODO: Return amount in and amount out. Maybe best to create a new map of keys to amount in and out and 
+	// return this for further processing. This would make it easier to do unit tests against the math also
+	// TODO: Add an info or Warn level log when amountIn is greater than amountOut. Normally they should be equal.
+	// It indicates an unusual transfer or else a bug in the program
+
 	return numProcessed, nil
 }
 
