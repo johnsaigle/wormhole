@@ -332,22 +332,14 @@ func TestValidateERC20Transfer(t *testing.T) {
 				Amount: big.NewInt(1),
 			},
 		},
-		"invalid: zero-value for To": {
-			input: ERC20Transfer{
-				TokenAddress: usdcAddr,
-				TokenChain:   NATIVE_CHAIN_ID,
-				From:         eoaAddrGeth,
-				// To:
-				Amount: big.NewInt(1),
-			},
-		},
+		// Note: transfer is allowed to be the zero address in the case where the token bridge is burning funds.
 		"invalid: nil Amount": {
 			input: ERC20Transfer{
 				TokenAddress: usdcAddr,
 				TokenChain:   NATIVE_CHAIN_ID,
 				From:         eoaAddrGeth,
-				To:     tokenBridgeAddr,
-				Amount: nil,
+				To:           tokenBridgeAddr,
+				Amount:       nil,
 			},
 		},
 		"invalid: negative Amount": {
@@ -355,8 +347,8 @@ func TestValidateERC20Transfer(t *testing.T) {
 				TokenAddress: usdcAddr,
 				TokenChain:   NATIVE_CHAIN_ID,
 				From:         eoaAddrGeth,
-				To:     tokenBridgeAddr,
-				Amount: big.NewInt(-1),
+				To:           tokenBridgeAddr,
+				Amount:       big.NewInt(-1),
 			},
 		},
 	}
@@ -383,6 +375,15 @@ func TestValidateERC20Transfer(t *testing.T) {
 				To:           tokenBridgeAddr,
 				From:         eoaAddrGeth,
 				Amount:       big.NewInt(100),
+			},
+		},
+		"valid: zero-value for To (burning funds)": {
+			input: ERC20Transfer{
+				TokenAddress: usdcAddr,
+				TokenChain:   NATIVE_CHAIN_ID,
+				From:         tokenBridgeAddr,
+				To:           ZERO_ADDRESS,
+				Amount:       big.NewInt(1),
 			},
 		},
 	}
@@ -551,8 +552,8 @@ func TestValidateLogMessagePublished(t *testing.T) {
 					TokenChain:       NATIVE_CHAIN_ID,
 					OriginAddress:    usdcAddr,
 					TargetAddress:    eoaAddrVAA,
-					AmountRaw:       big.NewInt(-1),
-					Amount: big.NewInt(7),
+					AmountRaw:        big.NewInt(-1),
+					Amount:           big.NewInt(7),
 				},
 			},
 		},
@@ -582,7 +583,7 @@ func TestValidateLogMessagePublished(t *testing.T) {
 					OriginAddress:    usdcAddr,
 					TargetAddress:    eoaAddrVAA,
 					AmountRaw:        big.NewInt(7),
-					Amount:          big.NewInt(-1),
+					Amount:           big.NewInt(-1),
 				},
 			},
 		},
@@ -596,7 +597,8 @@ func TestValidateLogMessagePublished(t *testing.T) {
 
 			err := validate[*LogMessagePublished](&test.input)
 			require.Error(t, err)
-			assert.ErrorContains(t, err, "invalid log")
+			_, ok := err.(*InvalidLogError)
+			assert.True(t, ok, "wrong error type: ", err.Error())
 		})
 	}
 

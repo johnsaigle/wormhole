@@ -175,7 +175,7 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 	for {
 		select {
 		case err := <-sub.Err():
-			logger.Fatal("got error on ethConnector's error channel", zap.Error(err))
+			logger.Warn("got error on ethConnector's error channel", zap.Error(err))
 			// TODO: do we need to overwrite sub? any risk?
 			_, connectErr := tryConnect(ethConnector, logC, errC, transferVerifier.logger)
 			if connectErr != nil {
@@ -395,6 +395,14 @@ func (tv *TransferVerifier[evmClient, connector]) ParseReceipt(
 	return &TransferReceipt{Deposits: &deposits, Transfers: &transfers, MessagePublicatons: &messagePublications}, nil
 }
 
+type InvariantError struct {
+	Msg string
+}
+
+func (i InvariantError) Error() string {
+	return fmt.Sprintf("invariant violated: %s", i.Msg)
+}
+
 // ProcessReceipt() verifies that a receipt for a LogMessagedPublished event does not verify a fundamental
 // invariant of Wormhole token transfers: when the core bridge reports a transfer has occurred, there must be a
 // corresponding transfer in the token bridge. This is determined by iterating through the logs of the receipt and
@@ -484,7 +492,7 @@ func (tv *TransferVerifier[evmClient, connector]) ProcessReceipt(
 			tv.logger.Error("transfer-out request for tokens that were never deposited",
 				zap.String("key", key))
 			// TODO: Is it better to return or continue here?
-			return numProcessed, errors.New("invariant violated: transfer-out request for tokens that were never deposited")
+			return numProcessed, &InvariantError{Msg:"transfer-out request for tokens that were never deposited"}
 		}
 
 		amountIn := transferredIntoBridge[key]
@@ -495,8 +503,8 @@ func (tv *TransferVerifier[evmClient, connector]) ProcessReceipt(
 			zap.String("amountIn", amountIn.String()))
 
 		if amountOut.Cmp(amountIn) > 0 {
-			tv.logger.Warn("requested amount out is larger than amount in")
-			return numProcessed, errors.New("invariant violated: requested amount out is larger than amount in")
+			tv.logger.Error("requested amount out is larger than amount in")
+			return numProcessed, &InvariantError{Msg:"requested amount out is larger than amount in"}
 		}
 	}
 

@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	fmtString "fmt"
 	"math/big"
@@ -344,17 +343,25 @@ func relevant[L TransferLog](tLog TransferLog, tv *TVAddresses) (key string, rel
 	return fmtString.Sprintf(KEY_FORMAT, tLog.OriginAddress(), tLog.OriginChain()), true
 }
 
+type InvalidLogError struct {
+	Msg string
+}
+
+func (i InvalidLogError) Error() string {
+	return fmt.Sprintf("invalid log: %s", i.Msg)
+}
+
 // validate() ensures a TransferLog is well-formed. This means that its fields are not nil and in most cases are not
 // equal to the zero-value for the field's type.
-func validate[L TransferLog](tLog TransferLog) (err error) {
+func validate[L TransferLog](tLog TransferLog) error {
 	// TODO: make custom error type here that prepends 'invalid log' 
 
 	if cmp(tLog.Emitter(), ZERO_ADDRESS) == 0 {
-		return errors.New("invalid log: emitter is the zero address")
+		return &InvalidLogError{Msg: "emitter is the zero address"}
 	}
 
 	if tLog.OriginChain() == 0 {
-		return errors.New("invalid log: originChain is 0")
+		return &InvalidLogError{Msg: "originChain is zero"}
 	}
 
 	// if cmp(tLog.OriginAddress(), ZERO_ADDRESS_VAA) == 0 {
@@ -362,38 +369,44 @@ func validate[L TransferLog](tLog TransferLog) (err error) {
 	// }
 
 	if tLog.TransferAmount() == nil {
-		return errors.New("invalid log: transfer amount is nil")
+		return &InvalidLogError{Msg: "transfer amount is nil"}
 	}
 
 	if tLog.TransferAmount().Sign() == -1  {
-		return errors.New("invalid log: transfer amount is negative")
+		return &InvalidLogError{Msg: "transfer amount is negative"}
 	}
 
-	if cmp(tLog.Destination(), ZERO_ADDRESS_VAA) == 0 {
-		return errors.New("invalid log: destination is not set")
-	}
 
 	switch log := tLog.(type) {
 	case *NativeDeposit:
 		// Deposit does not actually have a sender, so it should always be equal to the zero address.
 		if cmp(log.Sender(), ZERO_ADDRESS_VAA) != 0 {
-			return errors.New("invalid log: sender address for Deposit must be 0")
+			return &InvalidLogError{Msg: "invalid log: sender address for Deposit must be 0"}
 		}
 		if cmp(log.Emitter(), log.TokenAddress) != 0 {
-			return errors.New("invalid log: deposit emitter is not equal to its token address")
+			return &InvalidLogError{Msg: "invalid log: deposit emitter is not equal to its token address"}
+		}
+		if cmp(log.Destination(), ZERO_ADDRESS_VAA) == 0 {
+			return &InvalidLogError{Msg: "invalid log: destination is not set"}
 		}
 	case *ERC20Transfer:
+		// Note: The token bridge transfers to the zero address in order to burn tokens for some kinds of
+		// transfers. For this reason, there is no validation here to check if Destination is the zero address.
+
 		// Transfers and LogMessagePublished cannot have a sender with a 0 address
 		if cmp(log.Sender(), ZERO_ADDRESS_VAA) == 0 {
-			return errors.New("invalid log: sender cannot be zero")
+			return &InvalidLogError{Msg: "invalid log: sender cannot be zero"}
 		}
 		if cmp(log.Emitter(), log.TokenAddress) != 0 {
-			return errors.New("invalid log: deposit emitter is not equal to its token address")
+			return &InvalidLogError{Msg: "invalid log: deposit emitter is not equal to its token address"}
 		}
 	case *LogMessagePublished:
 		// Transfers and LogMessagePublished cannot have a sender with a 0 address
 		if cmp(log.Sender(), ZERO_ADDRESS_VAA) == 0 {
-			return errors.New("invalid log: sender cannot be zero")
+			return &InvalidLogError{Msg: "invalid log: sender cannot be zero"}
+		}
+		if cmp(log.Destination(), ZERO_ADDRESS_VAA) == 0 {
+			return &InvalidLogError{Msg: "invalid log: destination is not set"}
 		}
 
 		// TODO is this valid for assets that return the zero address from unwrap?
@@ -403,25 +416,25 @@ func validate[L TransferLog](tLog TransferLog) (err error) {
 
 		// The following values are not exposed by the interface, so check them directly here.
 		if log.TransferDetails == nil {
-			return errors.New("invalid log: TransferDetails cannot be nil")
+			return &InvalidLogError{Msg: "invalid log: TransferDetails cannot be nil"}
 		}
 		if cmp(log.TransferDetails.TargetAddress, ZERO_ADDRESS_VAA) == 0 {
-			return errors.New("invalid log: target address cannot be zero")
+			return &InvalidLogError{Msg: "invalid log: target address cannot be zero"}
 		}
 		if cmp(log.TransferDetails.OriginAddressRaw, ZERO_ADDRESS_VAA) == 0 {
-			return errors.New("invalid log: origin address raw cannot be zero")
+			return &InvalidLogError{Msg: "invalid log: origin address raw cannot be zero"}
 		}
 		if log.TransferDetails.AmountRaw == nil {
-			return errors.New("invalid log: amountRaw cannot be nil")
+			return &InvalidLogError{Msg: "invalid log: amountRaw cannot be nil"}
 		}
 		if log.TransferDetails.AmountRaw.Sign() == -1 {
-			return errors.New("invalid log: amountRaw cannot be negative")
+			return &InvalidLogError{Msg: "invalid log: amountRaw cannot be negative"}
 		}
 		if log.TransferDetails.PayloadType != TransferTokens && log.TransferDetails.PayloadType != TransferTokensWithPayload {
-			return errors.New("invalid log: payload type is not a transfer type")
+			return &InvalidLogError{Msg: "invalid log: payload type is not a transfer type"}
 		}
 	default:
-		return errors.New("invalid log: invalid transfer log type: unknown")
+		return &InvalidLogError{Msg: "invalid log: invalid transfer log type: unknown"}
 	}
 
 	return nil
