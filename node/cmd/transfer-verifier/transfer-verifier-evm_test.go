@@ -611,9 +611,8 @@ func TestProcessReceipt(t *testing.T) {
 			// TODO this could be expanded to check for specific error messages
 			if err != nil {
 				assert.True(t, test.shouldError, "test should have returned an error")
-				// Make sure we are getting an error thrown by the ProcessReceipt and not a different
-				// function
-				assert.ErrorContains(t, err, "invariant violated")
+				_, ok := err.(*InvariantError)
+				assert.True(t, ok, "wrong error type. expected InvariantError, got: `%w`", err)
 			} else {
 				assert.False(t, test.shouldError, "test should not have returned an error but got: `%w`", err)
 			}
