@@ -253,6 +253,14 @@ func TestValidateDeposit(t *testing.T) {
 				Amount:       nil,
 			},
 		},
+		"invalid: negative Amount": {
+			input: NativeDeposit{
+				TokenAddress: usdcAddr,
+				TokenChain:   NATIVE_CHAIN_ID,
+				Receiver:     tokenBridgeAddr,
+				Amount:       big.NewInt(-1),
+			},
+		},
 	}
 
 	for name, test := range invalidDeposits {
@@ -338,8 +346,17 @@ func TestValidateERC20Transfer(t *testing.T) {
 				TokenAddress: usdcAddr,
 				TokenChain:   NATIVE_CHAIN_ID,
 				From:         eoaAddrGeth,
-				// To:
+				To:     tokenBridgeAddr,
 				Amount: nil,
+			},
+		},
+		"invalid: negative Amount": {
+			input: ERC20Transfer{
+				TokenAddress: usdcAddr,
+				TokenChain:   NATIVE_CHAIN_ID,
+				From:         eoaAddrGeth,
+				To:     tokenBridgeAddr,
+				Amount: big.NewInt(-1),
 			},
 		},
 	}
@@ -509,7 +526,7 @@ func TestValidateLogMessagePublished(t *testing.T) {
 				},
 			},
 		},
-		"invalid: zero-value for AmountRaw": {
+		"invalid: nil AmountRaw": {
 			input: LogMessagePublished{
 				EventEmitter: coreBridgeAddr,
 				MsgSender:    tokenBridgeAddr,
@@ -524,7 +541,22 @@ func TestValidateLogMessagePublished(t *testing.T) {
 				},
 			},
 		},
-		"invalid: zero-value for Amount": {
+		"invalid: negative AmountRaw": {
+			input: LogMessagePublished{
+				EventEmitter: coreBridgeAddr,
+				MsgSender:    tokenBridgeAddr,
+				TransferDetails: &TransferDetails{
+					PayloadType:      TransferTokens,
+					OriginAddressRaw: usdcAddr,
+					TokenChain:       NATIVE_CHAIN_ID,
+					OriginAddress:    usdcAddr,
+					TargetAddress:    eoaAddrVAA,
+					AmountRaw:       big.NewInt(-1),
+					Amount: big.NewInt(7),
+				},
+			},
+		},
+		"invalid: nil Amount": {
 			input: LogMessagePublished{
 				EventEmitter: coreBridgeAddr,
 				MsgSender:    tokenBridgeAddr,
@@ -536,6 +568,21 @@ func TestValidateLogMessagePublished(t *testing.T) {
 					TargetAddress:    eoaAddrVAA,
 					AmountRaw:        big.NewInt(7),
 					// Amount:          big.NewInt(7),
+				},
+			},
+		},
+		"invalid: negative Amount": {
+			input: LogMessagePublished{
+				EventEmitter: coreBridgeAddr,
+				MsgSender:    tokenBridgeAddr,
+				TransferDetails: &TransferDetails{
+					PayloadType:      TransferTokens,
+					OriginAddressRaw: usdcAddr,
+					TokenChain:       NATIVE_CHAIN_ID,
+					OriginAddress:    usdcAddr,
+					TargetAddress:    eoaAddrVAA,
+					AmountRaw:        big.NewInt(7),
+					Amount:          big.NewInt(-1),
 				},
 			},
 		},

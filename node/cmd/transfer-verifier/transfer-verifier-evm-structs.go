@@ -347,6 +347,7 @@ func relevant[L TransferLog](tLog TransferLog, tv *TVAddresses) (key string, rel
 // validate() ensures a TransferLog is well-formed. This means that its fields are not nil and in most cases are not
 // equal to the zero-value for the field's type.
 func validate[L TransferLog](tLog TransferLog) (err error) {
+	// TODO: make custom error type here that prepends 'invalid log' 
 
 	if cmp(tLog.Emitter(), ZERO_ADDRESS) == 0 {
 		return errors.New("invalid log: emitter is the zero address")
@@ -362,6 +363,10 @@ func validate[L TransferLog](tLog TransferLog) (err error) {
 
 	if tLog.TransferAmount() == nil {
 		return errors.New("invalid log: transfer amount is nil")
+	}
+
+	if tLog.TransferAmount().Sign() == -1  {
+		return errors.New("invalid log: transfer amount is negative")
 	}
 
 	if cmp(tLog.Destination(), ZERO_ADDRESS_VAA) == 0 {
@@ -408,6 +413,9 @@ func validate[L TransferLog](tLog TransferLog) (err error) {
 		}
 		if log.TransferDetails.AmountRaw == nil {
 			return errors.New("invalid log: amountRaw cannot be nil")
+		}
+		if log.TransferDetails.AmountRaw.Sign() == -1 {
+			return errors.New("invalid log: amountRaw cannot be negative")
 		}
 		if log.TransferDetails.PayloadType != TransferTokens && log.TransferDetails.PayloadType != TransferTokensWithPayload {
 			return errors.New("invalid log: payload type is not a transfer type")
