@@ -166,7 +166,7 @@ func TestRelevantDeposit(t *testing.T) {
 			t.Parallel() // marks each test case as capable of running in parallel with each other
 			t.Log(name)
 
-			key, relevant := relevant[*NativeDeposit](&test.input, &mocks.transferVerifier.Addresses)
+			key, relevant := relevant[*NativeDeposit](&test.input, mocks.transferVerifier.Addresses)
 			assert.Equal(t, test.expected.key, key)
 			assert.Equal(t, test.expected.relevant, relevant)
 
@@ -184,7 +184,7 @@ func TestRelevantDeposit(t *testing.T) {
 			t.Parallel() // marks each test case as capable of running in parallel with each other
 			t.Log(name)
 
-			key, relevant := relevant[*ERC20Transfer](&test.input, &mocks.transferVerifier.Addresses)
+			key, relevant := relevant[*ERC20Transfer](&test.input, mocks.transferVerifier.Addresses)
 			assert.Equal(t, test.expected.key, key)
 			assert.Equal(t, test.expected.relevant, relevant)
 
@@ -202,7 +202,7 @@ func TestRelevantDeposit(t *testing.T) {
 			t.Parallel() // marks each test case as capable of running in parallel with each other
 			t.Log(name)
 
-			key, relevant := relevant[*LogMessagePublished](&test.input, &mocks.transferVerifier.Addresses)
+			key, relevant := relevant[*LogMessagePublished](&test.input, mocks.transferVerifier.Addresses)
 			assert.Equal(t, test.expected.key, key)
 			assert.Equal(t, test.expected.relevant, relevant)
 

@@ -8,12 +8,15 @@ import (
 	"fmt"
 	fmtString "fmt"
 	"math/big"
+	"time"
 
-	// "github.com/celo-org/celo-blockchain/ethclient"
+	connectors "github.com/certusone/wormhole/node/pkg/watchers/evm/connectors"
 	"github.com/certusone/wormhole/node/pkg/watchers/evm/connectors/ethabi"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	ethClient "github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/event"
 	"github.com/wormhole-foundation/wormhole/sdk/vaa"
 	"go.uber.org/zap"
 )
@@ -56,17 +59,6 @@ const (
 	TOPICS_COUNT_DEPOSIT = 2
 )
 
-// TransferVerifier contains configuration values for verifying transfers.
-type TransferVerifier[E evmClient, C connector] struct {
-	Addresses TVAddresses
-	// Wormhole connector for wrapping contract-specific interactions
-	logger zap.Logger
-	// Corresponds to the connector interface for EVM chains
-	ethConnector C
-	// Corresponds to an ethClient from go-ethereum
-	client E
-}
-
 // Important addresses for Transfer Verification.
 type TVAddresses struct {
 	CoreBridgeAddr common.Address
@@ -76,6 +68,27 @@ type TVAddresses struct {
 	WrappedNativeAddr common.Address
 }
 
+// TransferVerifier contains configuration values for verifying transfers.
+type TransferVerifier[E evmClient, C connector] struct {
+	Addresses *TVAddresses
+	// Wormhole connector for wrapping contract-specific interactions
+	logger zap.Logger
+	// Corresponds to the connector interface for EVM chains
+	ethConnector C
+	// Corresponds to an ethClient from go-ethereum
+	client E
+}
+
+func NewTransferVerifier(connector connectors.Connector, tvAddrs *TVAddresses, logger *zap.Logger) *TransferVerifier[*ethClient.Client, connectors.Connector] {
+	return &TransferVerifier[*ethClient.Client, connectors.Connector]{
+		Addresses: tvAddrs,
+		ethConnector: connector,
+		logger:       *logger,
+		client:       connector.Client(),
+	}
+}
+
+
 type connector interface {
 	ParseLogMessagePublished(log types.Log) (*ethabi.AbiLogMessagePublished, error)
 }
@@ -83,6 +96,82 @@ type connector interface {
 type evmClient interface {
 	// getDecimals()
 	CallContract(ctx context.Context, msg ethereum.CallMsg, blockNumber *big.Int) ([]byte, error)
+}
+
+type Subscription struct {
+	// TODO make generic or use an interface
+	client    *ethClient.Client
+	connector connectors.Connector
+	logC      chan *ethabi.AbiLogMessagePublished
+	errC      chan error
+	quit      chan struct{}
+}
+
+func NewSubscription(client *ethClient.Client, connector connectors.Connector) *Subscription {
+	return &Subscription{
+		client:    client,
+		connector: connector,
+		logC:      make(chan *ethabi.AbiLogMessagePublished),
+		errC:      make(chan error),
+		quit:      make(chan struct{}),
+	}
+}
+
+// Subscribe creates a subscription to WatchLogMessagePublished events and will attempt to reconnect when
+// errors occur, such as Websocket connection problems.
+func (s *Subscription) Subscribe(ctx context.Context) {
+	go func() {
+		for {
+			select {
+			case <-s.quit:
+				return
+			default:
+				subscription, err := s.connector.WatchLogMessagePublished(
+					ctx,
+					s.errC,
+					s.logC,
+				)
+
+				if err != nil {
+					s.errC <- fmt.Errorf("failed to subscribe to logs: %v", err)
+					time.Sleep(RECONNECT_DELAY) // Wait before retrying
+					continue
+				}
+
+				// Handle subscription until error occurs
+				err = s.handleSubscription(subscription)
+				if err != nil {
+					s.errC <- err
+					time.Sleep(RECONNECT_DELAY) // Wait before retrying
+				}
+			}
+		}
+	}()
+}
+
+func (s *Subscription) handleSubscription(subscription event.Subscription) error {
+	for {
+		select {
+		case <-s.quit:
+			subscription.Unsubscribe()
+			return nil
+		case err := <-subscription.Err():
+			subscription.Unsubscribe()
+			return fmt.Errorf("subscription error: %v", err)
+		}
+	}
+}
+
+func (s *Subscription) Events() <-chan *ethabi.AbiLogMessagePublished {
+	return s.logC
+}
+
+func (s *Subscription) Errors() <-chan error {
+	return s.errC
+}
+
+func (s *Subscription) Close() {
+	close(s.quit)
 }
 
 // Abstraction over the fields that are expected to be present for Transfer types encoded in receipt logs: Deposits, Transfers,
@@ -146,9 +235,8 @@ func (d *NativeDeposit) String() string {
 		d.TokenChain,
 		d.Receiver.String(),
 		d.Amount.String(),
-		)
+	)
 }
-
 
 // Abstraction over an ERC20 Transfer event.
 type ERC20Transfer struct {
@@ -160,7 +248,6 @@ type ERC20Transfer struct {
 	To         common.Address
 	Amount     *big.Int
 }
-
 
 func (t *ERC20Transfer) TransferAmount() *big.Int {
 	return t.Amount
@@ -195,11 +282,11 @@ func (t *ERC20Transfer) String() string {
 		t.From.String(),
 		t.To.String(),
 		t.Amount.String(),
-		)
+	)
 }
 
 // Abstraction over a LogMessagePublished event emitted by the core bridge.
-// TODO add String() method 
+// TODO add String() method
 type LogMessagePublished struct {
 	// Which contract emitted the event.
 	EventEmitter common.Address
@@ -383,7 +470,7 @@ func (i InvalidLogError) Error() string {
 // validate() ensures a TransferLog is well-formed. This means that its fields are not nil and in most cases are not
 // equal to the zero-value for the field's type.
 func validate[L TransferLog](tLog TransferLog) error {
-	// TODO: make custom error type here that prepends 'invalid log' 
+	// TODO: make custom error type here that prepends 'invalid log'
 
 	if cmp(tLog.Emitter(), ZERO_ADDRESS) == 0 {
 		return &InvalidLogError{Msg: "emitter is the zero address"}
@@ -393,15 +480,13 @@ func validate[L TransferLog](tLog TransferLog) error {
 		return &InvalidLogError{Msg: "originChain is zero"}
 	}
 
-
 	if tLog.TransferAmount() == nil {
 		return &InvalidLogError{Msg: "transfer amount is nil"}
 	}
 
-	if tLog.TransferAmount().Sign() == -1  {
+	if tLog.TransferAmount().Sign() == -1 {
 		return &InvalidLogError{Msg: "transfer amount is negative"}
 	}
-
 
 	switch log := tLog.(type) {
 	case *NativeDeposit:

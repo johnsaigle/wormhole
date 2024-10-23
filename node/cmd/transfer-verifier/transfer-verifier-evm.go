@@ -16,8 +16,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	ethClient "github.com/ethereum/go-ethereum/ethclient"
-	"github.com/ethereum/go-ethereum/event"
 	"github.com/wormhole-foundation/wormhole/sdk/vaa"
 
 	ipfslog "github.com/ipfs/go-log/v2"
@@ -25,7 +23,6 @@ import (
 	"go.uber.org/zap"
 
 	connectors "github.com/certusone/wormhole/node/pkg/watchers/evm/connectors"
-	"github.com/certusone/wormhole/node/pkg/watchers/evm/connectors/ethabi"
 )
 
 // Global variables for caching RPC responses.
@@ -55,9 +52,8 @@ var (
 )
 
 const (
-	// Maximum number of attempts to establish a subscription to the LogMessagePublished event emitted by the core contract.
-	// TODO: this could be a CLI parameter
-	MAX_RETRIES = 5
+	// Seconds to wait before trying to reconnect to the core contract event subscription.
+	RECONNECT_DELAY = 5 * time.Second
 )
 
 // Settings for how often to prune the processed receipts.
@@ -126,67 +122,43 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 			zap.Error(err))
 	}
 
-	transferVerifier := &TransferVerifier[*ethClient.Client, connectors.Connector]{
-		Addresses: TVAddresses{
+	// Create main configuration for Transfer Verification
+	transferVerifier := NewTransferVerifier(
+		ethConnector,
+		&TVAddresses{
 			CoreBridgeAddr:  common.HexToAddress(*evmCoreContract),
 			TokenBridgeAddr: common.HexToAddress(*evmTokenBridgeContract),
 			// TODO should be a CLI parameter so that we could support other EVM chains
 			WrappedNativeAddr: WETH_ADDRESS,
 		},
-		ethConnector: ethConnector,
-		logger:       *logger,
-		client:       ethConnector.Client(),
-	}
+		logger,
+	)
 
-	logC := make(chan *ethabi.AbiLogMessagePublished)
-	errC := make(chan error)
+	// Set-up for main processing loop
 
-	sub, _, err := tryConnect(ctx, ethConnector, logC, transferVerifier.logger)
-	defer sub.Unsubscribe()
-
-	if err != nil {
-		logger.Fatal("Error on WatchLogMessagePublished",
-			zap.Error(err))
-	}
-	if sub == nil {
-		logger.Fatal("WatchLogMessagePublished returned nil")
-	}
-
-	logger.Debug("evm rpc subscription created", zap.String("address", transferVerifier.Addresses.CoreBridgeAddr.String()))
-
+	// Subscription for LogMessagePublished events
+	sub := NewSubscription(ethConnector.Client(), ethConnector)
+	sub.Subscribe(ctx)
+	defer sub.Close()
 	// Counter for amount of logs processed.
 	countLogsProcessed := int(0)
-
 	// Mapping to track the transactions that have been processed.
 	processedTransactions := make(map[common.Hash]*types.Receipt)
-
 	// The latest transaction block number, used to determine the size of historic receipts to keep in memory.
 	lastBlockNumber := uint64(0)
-
 	// Ticker to clear historic transactions that have been processed
 	ticker := time.NewTicker(pruneConfig.pruneFrequency)
 	defer ticker.Stop() // delete for Go >= 1.23. See time.NewTicker() documentation.
 
-	// Main loop:
+	// MAIN LOOP:
 	// - watch for LogMessagePublished events coming from the connector attached to the core bridge.
 	// - parse receipts for these events
 	// - process parsed receipts to make sure they are valid
 	for {
 		select {
-		case err := <-sub.Err():
+		case err := <-sub.Errors():
 			logger.Warn("got error on ethConnector's error channel", zap.Error(err))
-			errC <- fmt.Errorf("error while processing message publication subscription: %w", err)
 
-			// TODO: Reconnection doesn't work right now.
-			// TODO: do we need to overwrite sub? any risk?
-			newSub, newErrC, connectErr := tryConnect(ctx, ethConnector, logC, transferVerifier.logger)
-			if connectErr != nil {
-				ctxCancel()
-				logger.Fatal("Could not reconnect. Terminating", zap.Error(err))
-			}
-			// not sure if this is valid
-			sub = newSub
-			errC = newErrC
 		// Do cleanup and statistics reporting.
 		case <-ticker.C:
 
@@ -207,7 +179,7 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 				zap.Int("numPrunedReceipts", numPrunedReceipts))
 
 		// Process observed LogMessagePublished events
-		case vLog := <-logC:
+		case vLog := <-sub.Events():
 
 			logger.Debug("detected LogMessagePublished event",
 				zap.String("txHash", vLog.Raw.TxHash.String()))
@@ -282,42 +254,6 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 			countLogsProcessed += int(numProcessed)
 		}
 	}
-}
-
-func tryConnect[C connectors.Connector](
-	ctx context.Context,
-	connector C,
-	logC chan *ethabi.AbiLogMessagePublished,
-	logger zap.Logger,
-) (newSub event.Subscription, newErrC chan error, err error) {
-	attempts := 0
-	for attempts < MAX_RETRIES {
-		attempts++
-		logger.Debug("Attempting connection",
-			zap.Int("connection attempt", attempts),
-			zap.Int("max retries", MAX_RETRIES))
-
-		// Make a connection using a new error channel. Otherwise, if the old one is used and an error persists,
-		// the main program loop will infinitely recurse into this function.
-		newSub, err = connector.WatchLogMessagePublished(
-			ctx,
-			newErrC,
-			logC,
-		)
-
-		if err != nil {
-			logger.Warn("Could not establish connection",
-				zap.Error(err))
-			continue
-		}
-		if newSub == nil {
-			logger.Warn("Could not establish connection: nil event subscription")
-			continue
-		}
-		/// Successful connection
-		return
-	}
-	return
 }
 
 // ParseReceipt converts a go-ethereum receipt struct into a TransferReceipt. It makes use of the ethConnector to
@@ -444,7 +380,7 @@ func (tv *TransferVerifier[evmClient, connector]) ProcessReceipt(
 			return logsProcessed, err
 		}
 
-		key, relevant := relevant[*NativeDeposit](deposit, &tv.Addresses)
+		key, relevant := relevant[*NativeDeposit](deposit, tv.Addresses)
 		if !relevant {
 			tv.logger.Debug("skip: irrelevant deposit",
 				zap.String("emitter", deposit.Emitter().String()),
@@ -470,7 +406,7 @@ func (tv *TransferVerifier[evmClient, connector]) ProcessReceipt(
 			return logsProcessed, err
 		}
 
-		key, relevant := relevant[*ERC20Transfer](transfer, &tv.Addresses)
+		key, relevant := relevant[*ERC20Transfer](transfer, tv.Addresses)
 		if !relevant {
 			tv.logger.Debug("skipping irrelevant transfer",
 				zap.String("emitter", transfer.Emitter().String()),
@@ -497,7 +433,7 @@ func (tv *TransferVerifier[evmClient, connector]) ProcessReceipt(
 			return logsProcessed, err
 		}
 
-		key, relevant := relevant[*LogMessagePublished](message, &tv.Addresses)
+		key, relevant := relevant[*LogMessagePublished](message, tv.Addresses)
 		if !relevant {
 			tv.logger.Debug("skip: irrelevant LogMessagePublished event")
 			continue
@@ -613,7 +549,6 @@ func (tv *TransferVerifier[ethClient, connector]) addWormholeDetails(details *Tr
 	}
 	denormalized := denormalize(details.AmountRaw, decimals)
 
-
 	// If the token was minted on the chain monitored by this program, set its OriginAddress equal to OriginAddressRaw.
 	var originAddress common.Address
 	if details.TokenChain == NATIVE_CHAIN_ID {
@@ -622,9 +557,9 @@ func (tv *TransferVerifier[ethClient, connector]) addWormholeDetails(details *Tr
 		newDetails.OriginAddress = originAddress
 		newDetails.Amount = denormalized
 		return newDetails, nil
-	} 
+	}
 
-	// If the token was minted on another chain, try to unwrap it. 
+	// If the token was minted on another chain, try to unwrap it.
 	unwrappedAddress, err := tv.unwrapIfWrapped(details.OriginAddressRaw.Bytes(), details.TokenChain)
 	if err != nil {
 		return
