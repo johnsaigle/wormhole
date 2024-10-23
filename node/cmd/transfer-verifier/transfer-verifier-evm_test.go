@@ -119,7 +119,7 @@ func setup() *mockConnections {
 	logger := ipfslog.Logger("wormhole-transfer-verifier-tests").Desugar()
 	ipfslog.SetAllLoggers(ipfslog.LevelDebug)
 	transferVerifier := &TransferVerifier[*mockClient, *mockConnector]{
-		Addresses: TVAddresses{
+		Addresses: &TVAddresses{
 			CoreBridgeAddr:    coreBridgeAddr,
 			TokenBridgeAddr:   tokenBridgeAddr,
 			WrappedNativeAddr: nativeAddr,
