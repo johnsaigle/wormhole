@@ -344,6 +344,46 @@ type TransferReceipt struct {
 	MessagePublicatons *[]*LogMessagePublished
 }
 
+// Summary of a processed TransferReceipt. Contains information about relevant
+// transfers requested in and out of the bridge.
+type ReceiptSummary struct {
+	// Number of LogMessagePublished events in the receipt
+	logsProcessed int
+	// The sum of tokens transferred into the Token Bridge contract.
+	in map[string]*big.Int
+	// The sum of tokens parsed from the core bridge's LogMessagePublished payload.
+	out map[string]*big.Int
+}
+
+func NewReceiptSummary() *ReceiptSummary {
+	return &ReceiptSummary{
+		logsProcessed: 0,
+		// The sum of tokens transferred into the Token Bridge contract.
+		in: make(map[string]*big.Int),
+		// The sum of tokens parsed from the core bridge's LogMessagePublished payload.
+		out: make(map[string]*big.Int),
+	}
+}
+
+func (s *ReceiptSummary) String() (outStr string) {
+
+	ins := ""
+	for key, amountIn := range s.in {
+		ins += fmt.Sprintf("%s=%s", key, amountIn.String())
+	}
+	outs := ""
+	for key, amountOut := range s.out {
+		outs += fmt.Sprintf("%s=%s ", key, amountOut.String())
+	}
+	outStr = fmt.Sprintf(
+		"receipt summary: logsProcessed=%d requestedIn={%s} requestedOut={%s}",
+		s.logsProcessed,
+		ins,
+		outs,
+	)
+	return outStr
+}
+
 // https://wormhole.com/docs/learn/infrastructure/vaas/#payload-types
 type VAAPayloadType uint8
 

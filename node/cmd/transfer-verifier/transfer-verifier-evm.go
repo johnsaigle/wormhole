@@ -3,7 +3,7 @@ package transferverifier
 // TODOs
 //	add comments at the top of this file
 //	fix up contexts where it makes sense
-//	allow the connector to reconnect after an error
+//	fix issue where cross-chain transfers show an invariant violation because of they cannot be found in the wrapped asset map
 
 import (
 	// "bytes"
@@ -27,12 +27,13 @@ import (
 
 // Global variables for caching RPC responses.
 var (
-	// Holds previously-recorded decimals (uint8) for token addresses (common.Address)
-	// that have been observed.
+	// Holds previously-recorded decimals (uint8) for token addresses
+	// (common.Address) that have been observed.
 	decimalsCache = make(map[common.Address]uint8)
 
-	// Maps the 32-byte token addresses received via LogMessagePublished events to their
-	// unwrapped 20-byte addresses. This mapping is also used for non-wrapped token addresses.
+	// Maps the 32-byte token addresses received via LogMessagePublished
+	// events to their unwrapped 20-byte addresses. This mapping is also
+	// used for non-wrapped token addresses.
 	wrappedCache = make(map[string]common.Address)
 )
 
@@ -58,8 +59,10 @@ const (
 
 // Settings for how often to prune the processed receipts.
 type pruneConfig struct {
-	// The block height at which to prune receipts, represented as an offset to subtract from the latest block
-	// height, e.g. a pruneHeightDelta of 10 means prune blocks older than latestBlockHeight - 10.
+	// The block height at which to prune receipts, represented as an
+	// offset to subtract from the latest block height, e.g. a
+	// pruneHeightDelta of 10 means prune blocks older than
+	// latestBlockHeight - 10.
 	pruneHeightDelta uint64
 	// How often to prune the cache.
 	pruneFrequency time.Duration
@@ -109,7 +112,9 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 	logger.Debug("EVM rpc connection", zap.String("url", *evmRpc))
 	logger.Debug("EVM core contract", zap.String("address", *evmCoreContract))
 	logger.Debug("EVM token bridge contract", zap.String("address", *evmTokenBridgeContract))
-	logger.Debug("EVM prune config", zap.Uint64("height delta", pruneConfig.pruneHeightDelta), zap.Duration("frequency", pruneConfig.pruneFrequency))
+	logger.Debug("EVM prune config", 
+		zap.Uint64("height delta", pruneConfig.pruneHeightDelta), 
+		zap.Duration("frequency", pruneConfig.pruneFrequency))
 
 	// Create the RPC connection, context, and channels
 	ctx, ctxCancel := context.WithCancel(context.Background())
@@ -239,29 +244,35 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 			}
 
 			// Ensure that the amount coming in is at least as much as the amount requested out.
-			numProcessed, err := transferVerifier.ProcessReceipt(transferReceipt)
+			summary, err := transferVerifier.ProcessReceipt(transferReceipt)
+			logger.Debug("finished processing receipt", zap.String("summary", summary.String()))
+
 			if err != nil {
 				logger.Error("detected invalid receipt", zap.Error(err), zap.String("txHash", vLog.Raw.TxHash.String()))
 				continue
 			}
 
 			// Update statistics
-			if numProcessed == 0 {
+			if summary.logsProcessed == 0 {
 				logger.Warn("receipt logs empty for tx", zap.String("txHash", vLog.Raw.TxHash.Hex()))
 				continue
 			}
 
-			countLogsProcessed += int(numProcessed)
+			countLogsProcessed += int(summary.logsProcessed)
 		}
 	}
 }
 
-// ParseReceipt converts a go-ethereum receipt struct into a TransferReceipt. It makes use of the ethConnector to
-// parse information from the logs within the receipt. This function is mainly helpful to isolate the
-// parsing code from the verification logic, which makes the latter easier to test without needing an active
-// RPC connection.
-// This function parses only events with topics needed for Transfer Verification. Any other events will be discarded.
-// This function is not responsible for checking that the values for the various fields are relevant, only that they are well-formed.
+// ParseReceipt converts a go-ethereum receipt struct into a TransferReceipt.
+// It makes use of the ethConnector to parse information from the logs within
+// the receipt. This function is mainly helpful to isolate the parsing code
+// from the verification logic, which makes the latter easier to test without
+// needing an active RPC connection.
+
+// This function parses only events with topics needed for Transfer
+// Verification. Any other events will be discarded. 
+// This function is not responsible for checking that the values for the
+// various fields are relevant, only that they are well-formed.
 func (tv *TransferVerifier[evmClient, connector]) ParseReceipt(
 	receipt *types.Receipt,
 ) (*TransferReceipt, error) {
@@ -351,33 +362,33 @@ func (i InvariantError) Error() string {
 	return fmt.Sprintf("invariant violated: %s", i.Msg)
 }
 
-// ProcessReceipt verifies that a receipt for a LogMessagedPublished event does not verify a fundamental
-// invariant of Wormhole token transfers: when the core bridge reports a transfer has occurred, there must be a
-// corresponding transfer in the token bridge. This is determined by iterating through the logs of the receipt and
-// ensuring that the sum transferred into the token bridge does not exceed the sum emitted by the core bridge.
+
+// ProcessReceipt verifies that a receipt for a LogMessagedPublished event does
+// not verify a fundamental invariant of Wormhole token transfers: when the
+// core bridge reports a transfer has occurred, there must be a corresponding
+// transfer in the token bridge. This is determined by iterating through the
+// logs of the receipt and ensuring that the sum transferred into the token
+// bridge does not exceed the sum emitted by the core bridge.
 func (tv *TransferVerifier[evmClient, connector]) ProcessReceipt(
 	transferReceipt *TransferReceipt,
-) (logsProcessed int, err error) {
+) (summary *ReceiptSummary, err error) {
+	summary = NewReceiptSummary()
+
 	if transferReceipt == nil {
 		tv.logger.Warn("transfer receipt is nil. Cannot perform transfer verification")
-		return 0, errors.New("got nil transfer receipt")
+		return summary, errors.New("got nil transfer receipt")
 	}
 	if len(*transferReceipt.MessagePublicatons) == 0 {
 		tv.logger.Warn("transfer receipt contained no LogMessagePublished events. Cannot perform transfer verification")
-		return 0, errors.New("no message publications in receipt")
+		return summary, errors.New("no message publications in receipt")
 	}
-
-	// The sum of tokens transferred into the Token Bridge contract.
-	transferredIntoBridge := make(map[string]*big.Int)
-	// The sum of tokens parsed from the core bridge's LogMessagePublished payload.
-	requestedOutOfBridge := make(map[string]*big.Int)
 
 	// Validate NativeDeposits
 	for _, deposit := range *transferReceipt.Deposits {
 
 		err := validate[*NativeDeposit](deposit)
 		if err != nil {
-			return logsProcessed, err
+			return summary, err
 		}
 
 		key, relevant := relevant[*NativeDeposit](deposit, tv.Addresses)
@@ -389,10 +400,10 @@ func (tv *TransferVerifier[evmClient, connector]) ProcessReceipt(
 			continue
 		}
 		if key == "" {
-			return logsProcessed, errors.New("Couldn't get key")
+			return summary, errors.New("Couldn't get key")
 		}
 
-		upsert(&transferredIntoBridge, key, deposit.TransferAmount())
+		upsert(&summary.in, key, deposit.TransferAmount())
 
 		tv.logger.Debug("a deposit into the token bridge was recorded",
 			zap.String("tokenAddress", deposit.TokenAddress.String()),
@@ -403,7 +414,7 @@ func (tv *TransferVerifier[evmClient, connector]) ProcessReceipt(
 	for _, transfer := range *transferReceipt.Transfers {
 		err := validate[*ERC20Transfer](transfer)
 		if err != nil {
-			return logsProcessed, err
+			return summary, err
 		}
 
 		key, relevant := relevant[*ERC20Transfer](transfer, tv.Addresses)
@@ -414,10 +425,10 @@ func (tv *TransferVerifier[evmClient, connector]) ProcessReceipt(
 			continue
 		}
 		if key == "" {
-			return logsProcessed, errors.New("Couldn't get key")
+			return summary, errors.New("Couldn't get key")
 		}
 
-		upsert(&transferredIntoBridge, key, transfer.TransferAmount())
+		upsert(&summary.in, key, transfer.TransferAmount())
 
 		tv.logger.Debug("a transfer into the token bridge was recorded",
 			zap.String("tokenAddress", transfer.TokenAddress.String()),
@@ -430,7 +441,7 @@ func (tv *TransferVerifier[evmClient, connector]) ProcessReceipt(
 
 		err := validate[*LogMessagePublished](message)
 		if err != nil {
-			return logsProcessed, err
+			return summary, err
 		}
 
 		key, relevant := relevant[*LogMessagePublished](message, tv.Addresses)
@@ -439,44 +450,51 @@ func (tv *TransferVerifier[evmClient, connector]) ProcessReceipt(
 			continue
 		}
 
-		upsert(&requestedOutOfBridge, key, message.TransferAmount())
+		upsert(&summary.out, key, message.TransferAmount())
 
 		tv.logger.Debug("successfully parsed a LogMessagePublished event payload",
 			zap.String("tokenAddress", td.OriginAddress.String()),
 			zap.String("tokenChain", td.TokenChain.String()),
 			zap.String("amount", td.Amount.String()))
 
-		logsProcessed++
+		summary.logsProcessed++
 	}
 
 	// TODO: Revisit error handling here. Are errors enough or should we do Fatal?
-	for key, amountOut := range requestedOutOfBridge {
-		if _, exists := transferredIntoBridge[key]; !exists {
+	err = nil
+	for key, amountOut := range summary.out {
+		var localErr error
+		if amountIn, exists := summary.in[key]; !exists {
 			tv.logger.Error("transfer-out request for tokens that were never deposited",
 				zap.String("key", key))
 			// TODO: Is it better to return or continue here?
-			return logsProcessed, &InvariantError{Msg: "transfer-out request for tokens that were never deposited"}
+			localErr = &InvariantError{Msg: "transfer-out request for tokens that were never deposited"}
+		} else {
+			tv.logger.Debug("bridge request processed",
+				zap.String("key", key),
+				zap.String("amountOut", amountOut.String()),
+				zap.String("amountIn", amountIn.String()))
+
+			if amountOut.Cmp(amountIn) == 1 {
+				tv.logger.Error("requested amount out is larger than amount in")
+				localErr = &InvariantError{Msg: "requested amount out is larger than amount in"}
+			}
+
+			// Normally the amounts should be equal. This case indicates
+			// an unusual transfer or else a bug in the program.
+			if amountOut.Cmp(amountIn) == -1 {
+				tv.logger.Warn("requested amount in is larger than amount out. ")
+			}
 		}
 
-		amountIn := transferredIntoBridge[key]
-
-		tv.logger.Debug("bridge request processed",
-			zap.String("key", key),
-			zap.String("amountOut", amountOut.String()),
-			zap.String("amountIn", amountIn.String()))
-
-		if amountOut.Cmp(amountIn) > 0 {
-			tv.logger.Error("requested amount out is larger than amount in")
-			return logsProcessed, &InvariantError{Msg: "requested amount out is larger than amount in"}
+		if err == nil {
+			err = localErr
+		} else {
+			err = errors.Join(err, localErr)
 		}
 	}
 
-	// TODO: Return amount in and amount out. Maybe best to create a new map of keys to amount in and out and
-	// return this for further processing. This would make it easier to do unit tests against the math also
-	// TODO: Add an info or Warn level log when amountIn is greater than amountOut. Normally they should be equal.
-	// It indicates an unusual transfer or else a bug in the program
-
-	return logsProcessed, nil
+	return
 }
 
 func parseERC20TransferEvent(logTopics []common.Hash, logData []byte) (from common.Address, to common.Address, amount *big.Int) {
@@ -539,8 +557,13 @@ func parseLogMessagePublishedPayload(
 }
 
 // addWormholeDetails() makes requests to the token bridge and token contract to get detailed, wormhole-specific information about
-// a transfer. Modifies parameter `details` as a side-effect
+// a transfer.
 func (tv *TransferVerifier[ethClient, connector]) addWormholeDetails(details *TransferDetails) (newDetails *TransferDetails, err error) {
+	// This function adds information to a TransferDetails struct, filling out its uninitialized fields.
+	// It popluates the following fields:
+	// - Amount: populate the Amount field by denormalizing details.AmountRaw.
+	// - OriginAddress: use ChainID and OriginAddressRaw to determine whether the token is wrapped.
+	// TODO: This function does not modify details in place, but it probably should.
 
 	// Fetch the token's decimals and update TransferDetails with the denormalized amount.
 	decimals, err := tv.getDecimals(details.OriginAddressRaw)
