@@ -606,9 +606,10 @@ func TestProcessReceipt(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Log(name)
 
-			numProcessed, err := mocks.transferVerifier.ProcessReceipt(test.transferReceipt)
-			assert.Equal(t, test.expected, numProcessed, "number of processed receipts did not match")
-			// TODO this could be expanded to check for specific error messages
+			summary, err := mocks.transferVerifier.ProcessReceipt(test.transferReceipt)
+
+			assert.Equal(t, test.expected, summary.logsProcessed, "number of processed receipts did not match")
+
 			if err != nil {
 				assert.True(t, test.shouldError, "test should have returned an error")
 				_, ok := err.(*InvariantError)
