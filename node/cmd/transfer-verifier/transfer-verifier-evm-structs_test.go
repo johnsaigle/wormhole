@@ -323,16 +323,7 @@ func TestValidateERC20Transfer(t *testing.T) {
 				Amount: big.NewInt(1),
 			},
 		},
-		"invalid: zero-value for From": {
-			input: ERC20Transfer{
-				TokenAddress: usdcAddr,
-				TokenChain:   NATIVE_CHAIN_ID,
-				// From:
-				To:     tokenBridgeAddr,
-				Amount: big.NewInt(1),
-			},
-		},
-		// Note: transfer is allowed to be the zero address in the case where the token bridge is burning funds.
+		// Note: transfer's To and From values are allowed to be the zero address.
 		"invalid: nil Amount": {
 			input: ERC20Transfer{
 				TokenAddress: usdcAddr,
@@ -375,6 +366,15 @@ func TestValidateERC20Transfer(t *testing.T) {
 				To:           tokenBridgeAddr,
 				From:         eoaAddrGeth,
 				Amount:       big.NewInt(100),
+			},
+		},
+		"valid: zero-value for From (possible Transfer event from non-ERC20 contract)": {
+			input: ERC20Transfer{
+				TokenAddress: usdcAddr,
+				TokenChain:   NATIVE_CHAIN_ID,
+				From:         ZERO_ADDRESS,
+				To:           tokenBridgeAddr,
+				Amount:       big.NewInt(1),
 			},
 		},
 		"valid: zero-value for To (burning funds)": {

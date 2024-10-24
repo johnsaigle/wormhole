@@ -254,10 +254,13 @@ func (t *ERC20Transfer) TransferAmount() *big.Int {
 }
 
 func (t *ERC20Transfer) Sender() vaa.Address {
+	// Note that this value may return zero for receipt logs that are in fact Transfers emitted from e.g. UniswapV2
+	// which have the same event signature as ERC20 Transfers.
 	return VAAAddrFrom(t.From)
 }
 
 func (t *ERC20Transfer) Destination() vaa.Address {
+	// Note that this value may return zero when tokens are being burned.
 	return VAAAddrFrom(t.To)
 }
 
@@ -547,10 +550,9 @@ func validate[L TransferLog](tLog TransferLog) error {
 		// Note: The token bridge transfers to the zero address in order to burn tokens for some kinds of
 		// transfers. For this reason, there is no validation here to check if Destination is the zero address.
 
-		// Transfers and LogMessagePublished cannot have a sender with a 0 address
-		if cmp(log.Sender(), ZERO_ADDRESS_VAA) == 0 {
-			return &InvalidLogError{Msg: "sender cannot be zero"}
-		}
+		// Sender must not be checked to be non-zero here. The event hash for Transfer also shows up in other
+		// popular contracts (e.g. UniswapV2) and may have a valid reason to set this field to zero.
+
 		if cmp(log.Emitter(), log.TokenAddress) != 0 {
 			return &InvalidLogError{Msg: "deposit emitter is not equal to its token address"}
 		}
@@ -558,7 +560,7 @@ func validate[L TransferLog](tLog TransferLog) error {
 			return &InvalidLogError{Msg: "originAddress is the zero address"}
 		}
 	case *LogMessagePublished:
-		// Transfers and LogMessagePublished cannot have a sender with a 0 address
+		// LogMessagePublished cannot have a sender with a 0 address
 		if cmp(log.Sender(), ZERO_ADDRESS_VAA) == 0 {
 			return &InvalidLogError{Msg: "sender cannot be zero"}
 		}
