@@ -22,7 +22,7 @@ import (
 )
 
 // Event Signatures
-var (
+const (
 	// LogMessagePublished(address indexed sender, uint64 sequence, uint32 nonce, bytes payload, uint8 consistencyLevel);
 	EVENTHASH_WORMHOLE_LOG_MESSAGE_PUBLISHED = "0x6eb224fb001ed210e379b335e35efe88672a8ce935d981a6896b27ffdf52a3b2"
 	// Transfer(address,address,uint256)
@@ -117,8 +117,9 @@ func NewSubscription(client *ethClient.Client, connector connectors.Connector) *
 	}
 }
 
-// Subscribe creates a subscription to WatchLogMessagePublished events and will attempt to reconnect when
-// errors occur, such as Websocket connection problems.
+// Subscribe creates a subscription to WatchLogMessagePublished events and will
+// attempt to reconnect when errors occur, such as Websocket connection
+// problems.
 func (s *Subscription) Subscribe(ctx context.Context) {
 	go func() {
 		for {
@@ -133,13 +134,16 @@ func (s *Subscription) Subscribe(ctx context.Context) {
 				)
 
 				if err != nil {
-					s.errC <- fmt.Errorf("failed to subscribe to logs: %v", err)
+					s.errC <- fmt.Errorf("failed to subscribe to logs: %w", err)
 					time.Sleep(RECONNECT_DELAY) // Wait before retrying
 					continue
 				}
 
 				// Handle subscription until error occurs
+				// TODO: This section of code should have a limit on the number of times it will retry
+				// and fail if it can't connect a certain number of times
 				err = s.handleSubscription(subscription)
+
 				if err != nil {
 					s.errC <- err
 					time.Sleep(RECONNECT_DELAY) // Wait before retrying
@@ -157,7 +161,7 @@ func (s *Subscription) handleSubscription(subscription event.Subscription) error
 			return nil
 		case err := <-subscription.Err():
 			subscription.Unsubscribe()
-			return fmt.Errorf("subscription error: %v", err)
+			return fmt.Errorf("subscription error: %w", err)
 		}
 	}
 }
@@ -174,8 +178,9 @@ func (s *Subscription) Close() {
 	close(s.quit)
 }
 
-// Abstraction over the fields that are expected to be present for Transfer types encoded in receipt logs: Deposits, Transfers,
-// and LogMessagePublished events.
+// Abstraction over the fields that are expected to be present for Transfer
+// types encoded in receipt logs: Deposits, Transfers, and LogMessagePublished
+// events.
 type TransferLog interface {
 	// Amount after (de)normalization
 	TransferAmount() *big.Int
@@ -254,8 +259,9 @@ func (t *ERC20Transfer) TransferAmount() *big.Int {
 }
 
 func (t *ERC20Transfer) Sender() vaa.Address {
-	// Note that this value may return zero for receipt logs that are in fact Transfers emitted from e.g. UniswapV2
-	// which have the same event signature as ERC20 Transfers.
+	// Note that this value may return zero for receipt logs that are in
+	// fact Transfers emitted from e.g. UniswapV2 which have the same event
+	// signature as ERC20 Transfers.
 	return VAAAddrFrom(t.From)
 }
 
@@ -336,10 +342,11 @@ func (l *LogMessagePublished) OriginChain() (chainID vaa.ChainID) {
 	return
 }
 
-// TransferReceipt is an abstraction over an EVM transaction receipt for a Token Bridge transfer. It represents
-// Deposit, Transfer, and LogMessagePublished events that can appear in a Receipt logs. Other event types are not
-// represented by this program because they are not relevant for checking the invariants on transfers sent from the
-// token bridge.
+// TransferReceipt is an abstraction over an EVM transaction receipt for a
+// Token Bridge transfer. It represents Deposit, Transfer, and
+// LogMessagePublished events that can appear in a Receipt logs. Other event
+// types are not represented by this program because they are not relevant for
+// checking the invariants on transfers sent from the token bridge.
 type TransferReceipt struct {
 	Deposits  *[]*NativeDeposit
 	Transfers *[]*ERC20Transfer
@@ -371,13 +378,16 @@ func NewReceiptSummary() *ReceiptSummary {
 func (s *ReceiptSummary) String() (outStr string) {
 
 	ins := ""
+
 	for key, amountIn := range s.in {
 		ins += fmt.Sprintf("%s=%s", key, amountIn.String())
 	}
+
 	outs := ""
 	for key, amountOut := range s.out {
 		outs += fmt.Sprintf("%s=%s ", key, amountOut.String())
 	}
+
 	outStr = fmt.Sprintf(
 		"receipt summary: logsProcessed=%d requestedIn={%s} requestedOut={%s}",
 		s.logsProcessed,
@@ -396,19 +406,22 @@ const (
 )
 
 // Abstraction of a Token Bridge transfer payload encoded in the Data field of a LogMessagePublished event.
+// It is meant to correspond to the API for Token Transfer messages as described in the Token Bridge whitepaper:
+// https://github.com/wormhole-foundation/wormhole/blob/main/whitepapers/0003_token_bridge.md#api--database-schema
 type TransferDetails struct {
 	PayloadType VAAPayloadType
-	// Raw token address parsed from the payload. May be wrapped.
-	OriginAddressRaw common.Address
+	// Denormalized amount, accounting for decimal differences between contracts and chains
+	Amount *big.Int
+	// Amount as sent in the raw payload
+	AmountRaw *big.Int
+	// Original chain where the token was minted.
 	TokenChain       vaa.ChainID
 	// Original address of the token when minted natively. Corresponds to the "unwrapped" address in the token bridge.
 	OriginAddress common.Address
+	// Raw token address parsed from the payload. May be wrapped.
+	OriginAddressRaw []byte
 	// Not necessarily an EVM address, so vaa.Address is used instead
 	TargetAddress vaa.Address
-	// Amount as sent in the raw payload
-	AmountRaw *big.Int
-	// Denormalized amount, accounting for decimal differences between contracts and chains
-	Amount *big.Int
 }
 
 func (td *TransferDetails) String() string {
@@ -424,7 +437,7 @@ func (td *TransferDetails) String() string {
 	)
 }
 
-// unwrapIfWrapped() returns the "unwrapped" address for a token a.k.a. the OriginAddress
+// unwrapIfWrapped returns the "unwrapped" address for a token a.k.a. the OriginAddress
 // of the token's original minting contract.
 func (tv *TransferVerifier[ethClient, connector]) unwrapIfWrapped(
 	tokenAddress []byte,
@@ -453,17 +466,23 @@ func (tv *TransferVerifier[ethClient, connector]) unwrapIfWrapped(
 		To:   &tv.Addresses.TokenBridgeAddr,
 		Data: calldata,
 	}
-	tv.logger.Debug("calling wrappedAsset", zap.String("tokenChain", tokenChain.String()), zap.String("tokenAddress", fmtString.Sprintf("%x", tokenAddress)))
+	tv.logger.Debug("calling wrappedAsset", 
+		zap.Uint16("tokenChain", uint16(tokenChain)),
+		zap.String("tokenChainString", tokenChain.String()), 
+		zap.String("tokenAddress", fmtString.Sprintf("%x", tokenAddress)))
 
 	result, err := tv.client.CallContract(ctx, ethCallMsg, nil)
 	if err != nil {
-		// This strictly handles the error case. The contract call will return the zero address for assets
-		// not in its map.
+		// This strictly handles the error case. The contract call will
+		// return the zero address for assets not in its map.
 		return common.Address{}, fmtString.Errorf("failed to get mapping for token %s", tokenAddressAsKey)
 	}
 
 	tokenAddressNative := common.BytesToAddress(result)
 	wrappedCache[tokenAddressAsKey] = tokenAddressNative
+
+	tv.logger.Debug("got wrappedAsset result", 
+		zap.String("tokenAddressNative", fmt.Sprintf("%x", tokenAddressNative)))
 
 	return tokenAddressNative, nil
 }
@@ -478,30 +497,40 @@ func relevant[L TransferLog](tLog TransferLog, tv *TVAddresses) (key string, rel
 			return
 		}
 
+		// We only care about deposits into the token bridge.
 		if cmp(log.Destination(), tv.TokenBridgeAddr) != 0 {
 			return
 		}
+
 	case *ERC20Transfer:
+		// We only care about transfers sent to the token bridge.
 		if cmp(log.Destination(), tv.TokenBridgeAddr) != 0 {
 			return
 		}
+
 	case *LogMessagePublished:
 		// This check is already done elsewhere but it's important.
 		if cmp(log.Emitter(), tv.CoreBridgeAddr) != 0 {
 			return
 		}
+
 		// Only consider LogMessagePublished events with msg.sender equal to the Token Bridge
 		if cmp(log.Sender(), tv.TokenBridgeAddr) != 0 {
 			return
 		}
+
 		// The following values are not exposed by the interface, so check them directly here.
 		if log.TransferDetails.PayloadType != TransferTokens && log.TransferDetails.PayloadType != TransferTokensWithPayload {
 			return
 		}
+
 	}
 	return fmtString.Sprintf(KEY_FORMAT, tLog.OriginAddress(), tLog.OriginChain()), true
 }
 
+// Custom error type indicating an issue in issue in a type that implements the
+// TransferLog interface. Used to ensure that a TransferLog is well-formed.
+// Typically indicates a bug in the code.
 type InvalidLogError struct {
 	Msg string
 }
@@ -510,11 +539,12 @@ func (i InvalidLogError) Error() string {
 	return fmt.Sprintf("invalid log: %s", i.Msg)
 }
 
-// validate() ensures a TransferLog is well-formed. This means that its fields are not nil and in most cases are not
-// equal to the zero-value for the field's type.
+// validate() ensures a TransferLog is well-formed. This means that its fields
+// are not nil and in most cases are not equal to the zero-value for the
+// field's type.
 func validate[L TransferLog](tLog TransferLog) error {
-	// TODO: make custom error type here that prepends 'invalid log'
 
+	// Generic validation for all TransferLogs
 	if cmp(tLog.Emitter(), ZERO_ADDRESS) == 0 {
 		return &InvalidLogError{Msg: "emitter is the zero address"}
 	}
@@ -547,11 +577,15 @@ func validate[L TransferLog](tLog TransferLog) error {
 			return &InvalidLogError{Msg: "originAddress is the zero address"}
 		}
 	case *ERC20Transfer:
-		// Note: The token bridge transfers to the zero address in order to burn tokens for some kinds of
-		// transfers. For this reason, there is no validation here to check if Destination is the zero address.
+		// Note: The token bridge transfers to the zero address in
+		// order to burn tokens for some kinds of transfers. For this
+		// reason, there is no validation here to check if Destination
+		// is the zero address.
 
-		// Sender must not be checked to be non-zero here. The event hash for Transfer also shows up in other
-		// popular contracts (e.g. UniswapV2) and may have a valid reason to set this field to zero.
+		// Sender must not be checked to be non-zero here. The event
+		// hash for Transfer also shows up in other popular contracts
+		// (e.g. UniswapV2) and may have a valid reason to set this
+		// field to zero.
 
 		if cmp(log.Emitter(), log.TokenAddress) != 0 {
 			return &InvalidLogError{Msg: "deposit emitter is not equal to its token address"}
@@ -580,9 +614,16 @@ func validate[L TransferLog](tLog TransferLog) error {
 		if cmp(log.TransferDetails.TargetAddress, ZERO_ADDRESS_VAA) == 0 {
 			return &InvalidLogError{Msg: "target address cannot be zero"}
 		}
-		if cmp(log.TransferDetails.OriginAddressRaw, ZERO_ADDRESS_VAA) == 0 {
-			return &InvalidLogError{Msg: "origin address raw cannot be zero"}
+
+		if len(log.TransferDetails.OriginAddressRaw) == 0 {
+			return &InvalidLogError{Msg: "origin address raw cannot be empty"}
 		}
+
+		// if bytes.Compare(log.TransferDetails.OriginAddressRaw, ZERO_ADDRESS_VAA.Bytes()) == 0 {
+		// 	return &InvalidLogError{Msg: "origin address raw cannot be zero"}
+		// }
+
+
 		if log.TransferDetails.AmountRaw == nil {
 			return &InvalidLogError{Msg: "amountRaw cannot be nil"}
 		}
@@ -598,10 +639,6 @@ func validate[L TransferLog](tLog TransferLog) error {
 
 	return nil
 }
-
-// func (tv *TransferVerifier[E, C]) validate(t *TransferERC20) bool {
-// 	return false
-// }
 
 // getDecimals() is equivalent to calling decimals() on a contract that follows the ERC20 standard.
 func (tv *TransferVerifier[evmClient, connector]) getDecimals(
@@ -623,11 +660,18 @@ func (tv *TransferVerifier[evmClient, connector]) getDecimals(
 	}
 
 	result, err := tv.client.CallContract(ctx, ethCallMsg, nil)
-	if err != nil || len(result) < EVM_WORD_LENGTH {
-		tv.logger.Warn("failed to get decimals for token",
+	if err != nil {
+		tv.logger.Warn("error from getDecimals() for token",
 			zap.String("tokenAddress", tokenAddress.String()),
 			zap.ByteString("result", result),
 			zap.Error(err))
+		return 0, err
+	}
+
+	if len(result) < EVM_WORD_LENGTH {
+		tv.logger.Warn("failed to get decimals for token: result has insufficient length",
+			zap.String("tokenAddress", tokenAddress.String()),
+			zap.ByteString("result", result))
 		return 0, err
 	}
 

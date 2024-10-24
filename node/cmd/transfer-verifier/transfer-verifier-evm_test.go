@@ -2,6 +2,7 @@ package transferverifier
 
 // TODO:
 // - more robust mocking of RPC return values so that we can test multiple cases
+// - add tests checking amount values from ProcessReceipt
 
 import (
 	"context"
@@ -165,7 +166,7 @@ func TestParseReceiptHappyPath(t *testing.T) {
 						MsgSender:    tokenBridgeAddr,
 						TransferDetails: &TransferDetails{
 							PayloadType:     TransferTokens,
-							OriginAddressRaw: usdcAddr,
+							OriginAddressRaw: common.LeftPadBytes(usdcAddr.Bytes(), EVM_WORD_LENGTH),
 							TokenChain:      2, // Wormhole ethereum chain ID
 							AmountRaw:       big.NewInt(1),
 							TargetAddress:   eoaAddrVAA,
@@ -402,7 +403,7 @@ func TestProcessReceipt(t *testing.T) {
 						MsgSender:    tokenBridgeAddr,
 						TransferDetails: &TransferDetails{
 							PayloadType:     TransferTokens,
-							OriginAddressRaw: nativeAddr,
+							OriginAddressRaw: nativeAddr.Bytes(),
 							OriginAddress:   nativeAddr,
 							TargetAddress:   eoaAddrVAA,
 							TokenChain:      2,
@@ -433,7 +434,7 @@ func TestProcessReceipt(t *testing.T) {
 						MsgSender:    tokenBridgeAddr,
 						TransferDetails: &TransferDetails{
 							PayloadType:     TransferTokens,
-							OriginAddressRaw: usdcAddr,
+							OriginAddressRaw: usdcAddr.Bytes(),
 							OriginAddress:   usdcAddr,
 							TokenChain:      2,
 							TargetAddress:   eoaAddrVAA,
@@ -463,7 +464,7 @@ func TestProcessReceipt(t *testing.T) {
 						MsgSender:    tokenBridgeAddr,
 						TransferDetails: &TransferDetails{
 							PayloadType:     TransferTokens,
-							OriginAddressRaw: nativeAddr,
+							OriginAddressRaw: nativeAddr.Bytes(),
 							TokenChain:      2,
 							OriginAddress:   nativeAddr,
 							TargetAddress:   eoaAddrVAA,
@@ -494,7 +495,7 @@ func TestProcessReceipt(t *testing.T) {
 						MsgSender:    tokenBridgeAddr,
 						TransferDetails: &TransferDetails{
 							PayloadType:     TransferTokens,
-							OriginAddressRaw: usdcAddr,
+							OriginAddressRaw: usdcAddr.Bytes(),
 							OriginAddress:   usdcAddr,
 							TargetAddress:   eoaAddrVAA,
 							TokenChain:      2,
@@ -524,7 +525,7 @@ func TestProcessReceipt(t *testing.T) {
 						MsgSender:    tokenBridgeAddr,
 						TransferDetails: &TransferDetails{
 							PayloadType:     TransferTokens,
-							OriginAddressRaw: nativeAddr,
+							OriginAddressRaw: nativeAddr.Bytes(),
 							OriginAddress:   nativeAddr,
 							TargetAddress:   eoaAddrVAA,
 							TokenChain:      vaa.ChainIDEthereum,
@@ -555,7 +556,7 @@ func TestProcessReceipt(t *testing.T) {
 						MsgSender:    tokenBridgeAddr,
 						TransferDetails: &TransferDetails{
 							PayloadType:     TransferTokens,
-							OriginAddressRaw: nativeAddr,
+							OriginAddressRaw: nativeAddr.Bytes(),
 							OriginAddress:   nativeAddr,
 							TargetAddress:   eoaAddrVAA,
 							TokenChain:      2,
@@ -586,7 +587,7 @@ func TestProcessReceipt(t *testing.T) {
 						MsgSender:    tokenBridgeAddr,
 						TransferDetails: &TransferDetails{
 							PayloadType:     TransferTokens,
-							OriginAddressRaw: nativeAddr,
+							OriginAddressRaw: nativeAddr.Bytes(),
 							OriginAddress:   nativeAddr,
 							TargetAddress:   eoaAddrVAA,
 							TokenChain:      2,

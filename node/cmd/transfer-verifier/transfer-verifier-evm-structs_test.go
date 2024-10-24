@@ -100,7 +100,7 @@ func TestRelevantDeposit(t *testing.T) {
 				MsgSender:    tokenBridgeAddr,
 				TransferDetails: &TransferDetails{
 					PayloadType:      TransferTokens,
-					OriginAddressRaw: usdcAddr,
+					OriginAddressRaw: usdcAddr.Bytes(),
 					TokenChain:       NATIVE_CHAIN_ID,
 					OriginAddress:    nativeAddr,
 					TargetAddress:    eoaAddrVAA,
@@ -116,7 +116,7 @@ func TestRelevantDeposit(t *testing.T) {
 				MsgSender:    eoaAddrGeth,
 				TransferDetails: &TransferDetails{
 					PayloadType:      TransferTokens,
-					OriginAddressRaw: usdcAddr,
+					OriginAddressRaw: usdcAddr.Bytes(),
 					TokenChain:       NATIVE_CHAIN_ID,
 					OriginAddress:    nativeAddr,
 					TargetAddress:    eoaAddrVAA,
@@ -132,7 +132,7 @@ func TestRelevantDeposit(t *testing.T) {
 				MsgSender:    tokenBridgeAddr,
 				TransferDetails: &TransferDetails{
 					PayloadType:      TransferTokens,
-					OriginAddressRaw: usdcAddr,
+					OriginAddressRaw: usdcAddr.Bytes(),
 					TokenChain:       NATIVE_CHAIN_ID,
 					OriginAddress:    nativeAddr,
 					TargetAddress:    eoaAddrVAA,
@@ -148,7 +148,7 @@ func TestRelevantDeposit(t *testing.T) {
 				MsgSender:    tokenBridgeAddr,
 				TransferDetails: &TransferDetails{
 					PayloadType:      2,
-					OriginAddressRaw: usdcAddr,
+					OriginAddressRaw: usdcAddr.Bytes(),
 					TokenChain:       NATIVE_CHAIN_ID,
 					OriginAddress:    nativeAddr,
 					TargetAddress:    eoaAddrVAA,
@@ -412,7 +412,7 @@ func TestValidateLogMessagePublished(t *testing.T) {
 				MsgSender: tokenBridgeAddr,
 				TransferDetails: &TransferDetails{
 					PayloadType:      TransferTokens,
-					OriginAddressRaw: usdcAddr,
+					OriginAddressRaw: usdcAddr.Bytes(),
 					TokenChain:       NATIVE_CHAIN_ID,
 					OriginAddress:    usdcAddr,
 					TargetAddress:    eoaAddrVAA,
@@ -427,7 +427,7 @@ func TestValidateLogMessagePublished(t *testing.T) {
 				// MsgSender:    tokenBridgeAddr,
 				TransferDetails: &TransferDetails{
 					PayloadType:      TransferTokens,
-					OriginAddressRaw: usdcAddr,
+					OriginAddressRaw: usdcAddr.Bytes(),
 					TokenChain:       NATIVE_CHAIN_ID,
 					OriginAddress:    usdcAddr,
 					TargetAddress:    eoaAddrVAA,
@@ -457,7 +457,7 @@ func TestValidateLogMessagePublished(t *testing.T) {
 				MsgSender:    tokenBridgeAddr,
 				TransferDetails: &TransferDetails{
 					// PayloadType:     TransferTokens,
-					OriginAddressRaw: usdcAddr,
+					OriginAddressRaw: usdcAddr.Bytes(),
 					TokenChain:       NATIVE_CHAIN_ID,
 					OriginAddress:    usdcAddr,
 					TargetAddress:    eoaAddrVAA,
@@ -487,7 +487,7 @@ func TestValidateLogMessagePublished(t *testing.T) {
 				MsgSender:    tokenBridgeAddr,
 				TransferDetails: &TransferDetails{
 					PayloadType:      TransferTokens,
-					OriginAddressRaw: usdcAddr,
+					OriginAddressRaw: usdcAddr.Bytes(),
 					// TokenChain:      NATIVE_CHAIN_ID,
 					OriginAddress: usdcAddr,
 					TargetAddress: eoaAddrVAA,
@@ -518,7 +518,7 @@ func TestValidateLogMessagePublished(t *testing.T) {
 				MsgSender:    tokenBridgeAddr,
 				TransferDetails: &TransferDetails{
 					PayloadType:      TransferTokens,
-					OriginAddressRaw: usdcAddr,
+					OriginAddressRaw: usdcAddr.Bytes(),
 					TokenChain:       NATIVE_CHAIN_ID,
 					OriginAddress:    usdcAddr,
 					// TargetAddress:   eoaAddrVAA,
@@ -533,7 +533,7 @@ func TestValidateLogMessagePublished(t *testing.T) {
 				MsgSender:    tokenBridgeAddr,
 				TransferDetails: &TransferDetails{
 					PayloadType:      TransferTokens,
-					OriginAddressRaw: usdcAddr,
+					OriginAddressRaw: usdcAddr.Bytes(),
 					TokenChain:       NATIVE_CHAIN_ID,
 					OriginAddress:    usdcAddr,
 					TargetAddress:    eoaAddrVAA,
@@ -548,7 +548,7 @@ func TestValidateLogMessagePublished(t *testing.T) {
 				MsgSender:    tokenBridgeAddr,
 				TransferDetails: &TransferDetails{
 					PayloadType:      TransferTokens,
-					OriginAddressRaw: usdcAddr,
+					OriginAddressRaw: usdcAddr.Bytes(),
 					TokenChain:       NATIVE_CHAIN_ID,
 					OriginAddress:    usdcAddr,
 					TargetAddress:    eoaAddrVAA,
@@ -563,7 +563,7 @@ func TestValidateLogMessagePublished(t *testing.T) {
 				MsgSender:    tokenBridgeAddr,
 				TransferDetails: &TransferDetails{
 					PayloadType:      TransferTokens,
-					OriginAddressRaw: usdcAddr,
+					OriginAddressRaw: usdcAddr.Bytes(),
 					TokenChain:       NATIVE_CHAIN_ID,
 					OriginAddress:    usdcAddr,
 					TargetAddress:    eoaAddrVAA,
@@ -578,7 +578,7 @@ func TestValidateLogMessagePublished(t *testing.T) {
 				MsgSender:    tokenBridgeAddr,
 				TransferDetails: &TransferDetails{
 					PayloadType:      TransferTokens,
-					OriginAddressRaw: usdcAddr,
+					OriginAddressRaw: usdcAddr.Bytes(),
 					TokenChain:       NATIVE_CHAIN_ID,
 					OriginAddress:    usdcAddr,
 					TargetAddress:    eoaAddrVAA,
@@ -611,7 +611,7 @@ func TestValidateLogMessagePublished(t *testing.T) {
 				MsgSender:    tokenBridgeAddr,
 				TransferDetails: &TransferDetails{
 					PayloadType:      TransferTokens,
-					OriginAddressRaw: usdcAddr,
+					OriginAddressRaw: usdcAddr.Bytes(),
 					TokenChain:       NATIVE_CHAIN_ID,
 					OriginAddress:    eoaAddrGeth,
 					TargetAddress:    eoaAddrVAA,
@@ -626,7 +626,7 @@ func TestValidateLogMessagePublished(t *testing.T) {
 				MsgSender:    eoaAddrGeth,
 				TransferDetails: &TransferDetails{
 					PayloadType:      TransferTokensWithPayload,
-					OriginAddressRaw: usdcAddr,
+					OriginAddressRaw: usdcAddr.Bytes(),
 					TokenChain:       NATIVE_CHAIN_ID,
 					OriginAddress:    eoaAddrGeth,
 					TargetAddress:    eoaAddrVAA,
