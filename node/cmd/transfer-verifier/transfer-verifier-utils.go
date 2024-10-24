@@ -47,6 +47,7 @@ func extractFromJsonPath[T any](data json.RawMessage, path string) (T, error) {
 // Normalize the amount to 8 decimals. If the amount has more than 8 decimals,
 // the amount is divided by 10^(decimals-8). If the amount has less than 8
 // decimals, the amount is returned as is.
+// https://wormhole.com/docs/build/start-building/supported-networks/evm/#addresses
 func normalize(amount *big.Int, decimals uint8) (normalizedAmount *big.Int) {
 	if amount == nil {
 		return nil
@@ -64,8 +65,11 @@ func normalize(amount *big.Int, decimals uint8) (normalizedAmount *big.Int) {
 
 // denormalize() scales an amount to its native decimal representation by multiplying it by some power of 10.
 // See also:
-// - documentation: https://github.com/wormhole-foundation/wormhole/blob/main/whitepapers/0003_token_bridge.md#handling-of-token-amounts-and-decimals
-// - solidity implementation: https://github.com/wormhole-foundation/wormhole/blob/91ec4d1dc01f8b690f0492815407505fb4587520/ethereum/contracts/bridge/Bridge.sol#L295-L300
+// - documentation: 
+//	https://github.com/wormhole-foundation/wormhole/blob/main/whitepapers/0003_token_bridge.md#handling-of-token-amounts-and-decimals
+//	https://wormhole.com/docs/build/start-building/supported-networks/evm/#addresses
+// - solidity implementation: 
+//	https://github.com/wormhole-foundation/wormhole/blob/91ec4d1dc01f8b690f0492815407505fb4587520/ethereum/contracts/bridge/Bridge.sol#L295-L300
 func denormalize(
 	amount *big.Int,
 	decimals uint8,
