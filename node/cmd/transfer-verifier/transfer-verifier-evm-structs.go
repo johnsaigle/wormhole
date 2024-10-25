@@ -1,10 +1,15 @@
 package transferverifier
 
+// TODO
+// Change constant naming convention to PascalCase (maybe goimports can do this automatically)
+// Can the actual ethCalls be factored into their own function?
+
 import (
 	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	fmtString "fmt"
 	"math/big"
@@ -34,9 +39,13 @@ const (
 // Function signatures
 var (
 	// wrappedAsset(uint16 tokenChainId, bytes32 tokenAddress) => 0x1ff1e286
-	TOKEN_BRIDGE_WRAPPED_ASSET = []byte("\x1f\xf1\xe2\x86")
+	TOKEN_BRIDGE_WRAPPED_ASSET_SIGNATURE = []byte("\x1f\xf1\xe2\x86")
+	// isWrappedAsset(address token) => 0x1a2be4da
+	TOKEN_BRIDGE_IS_WRAPPED_ASSET_SIGNATURE = []byte("\x1a\x2b\xe4\xda")
 	// decimals() => 0x313ce567
 	ERC20_DECIMALS_SIGNATURE = []byte("\x31\x3c\xe5\x67")
+	// chainId() => 0x9a8a0592
+	WRAPPED_ERC20_CHAIN_ID_SIGNATURE = []byte("\x9a\x8a\x05\x92")
 )
 
 // Fixed addresses
@@ -57,6 +66,11 @@ const (
 	TOPICS_COUNT_TRANSFER = 3
 	// The expected total number of indexed topics for a WETH Deposit event
 	TOPICS_COUNT_DEPOSIT = 2
+)
+
+
+const (
+	RPC_TIMEOUT = 10 * time.Second
 )
 
 // Important addresses for Transfer Verification.
@@ -443,7 +457,8 @@ func (tv *TransferVerifier[ethClient, connector]) unwrapIfWrapped(
 	tokenAddress []byte,
 	tokenChain vaa.ChainID,
 ) (unwrappedTokenAddress common.Address, err error) {
-	ctx := context.TODO()
+	ctx, cancel := context.WithTimeout(context.Background(), RPC_TIMEOUT)
+	defer cancel()
 
 	tokenAddressAsKey := hex.EncodeToString(tokenAddress)
 
@@ -457,10 +472,10 @@ func (tv *TransferVerifier[ethClient, connector]) unwrapIfWrapped(
 	// prepare eth_call data, 4-byte signature + 2x 32 byte arguments
 	calldata := make([]byte, 4+EVM_WORD_LENGTH+EVM_WORD_LENGTH)
 
-	copy(calldata, TOKEN_BRIDGE_WRAPPED_ASSET)
+	copy(calldata, TOKEN_BRIDGE_WRAPPED_ASSET_SIGNATURE)
 	// Add the uint16 tokenChain as the last two bytes in the first argument
 	binary.BigEndian.PutUint16(calldata[4+30:], uint16(tokenChain))
-	copy(calldata[4+EVM_WORD_LENGTH:], tokenAddress)
+	copy(calldata[4+EVM_WORD_LENGTH:], common.LeftPadBytes(tokenAddress, EVM_WORD_LENGTH))
 
 	ethCallMsg := ethereum.CallMsg{
 		To:   &tv.Addresses.TokenBridgeAddr,
@@ -469,7 +484,8 @@ func (tv *TransferVerifier[ethClient, connector]) unwrapIfWrapped(
 	tv.logger.Debug("calling wrappedAsset", 
 		zap.Uint16("tokenChain", uint16(tokenChain)),
 		zap.String("tokenChainString", tokenChain.String()), 
-		zap.String("tokenAddress", fmtString.Sprintf("%x", tokenAddress)))
+		zap.String("tokenAddress", fmtString.Sprintf("%x", tokenAddress)),
+		zap.String("callData", fmtString.Sprintf("%x", calldata)))
 
 	result, err := tv.client.CallContract(ctx, ethCallMsg, nil)
 	if err != nil {
@@ -485,6 +501,109 @@ func (tv *TransferVerifier[ethClient, connector]) unwrapIfWrapped(
 		zap.String("tokenAddressNative", fmt.Sprintf("%x", tokenAddressNative)))
 
 	return tokenAddressNative, nil
+}
+
+func (tv *TransferVerifier[ethClient, Connector]) chainId(
+	addr common.Address,
+) (vaa.ChainID, error) {
+
+	if cmp(addr, ZERO_ADDRESS) == 0 {
+		return 0, errors.New("got zero address as parameter for chainId() call")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), RPC_TIMEOUT)
+	defer cancel()
+
+	tokenAddressAsKey := addr.Hex()
+
+	// If the token address already exists in the wrappedCache mapping the
+	// cached value can be returned.
+	if chainId, exists := nativeChainCache[tokenAddressAsKey]; exists {
+		tv.logger.Debug("wrapped asset found in native chain cache, returning")
+		return chainId, nil
+	}
+
+	// prepare eth_call data, 4-byte signature
+	calldata := make([]byte, 4)
+
+	copy(calldata, WRAPPED_ERC20_CHAIN_ID_SIGNATURE)
+
+	ethCallMsg := ethereum.CallMsg{
+		To:   &addr,
+		Data: calldata,
+	}
+
+	tv.logger.Debug("calling chainId()", zap.String("tokenAddress", addr.String()))
+
+	result, err := tv.client.CallContract(ctx, ethCallMsg, nil)
+
+	if err != nil {
+		// TODO add more checks here
+		return 0, err
+	}
+	if len(result) < EVM_WORD_LENGTH {
+		tv.logger.Warn("result for chainId has insufficient length", 
+			zap.Int("length", len(result)),
+			zap.String("result",fmt.Sprintf("%x", result)))
+		return 0, errors.New("result for chainId has insufficient length")
+	}
+
+	// TODO: should this be big endian?
+	chainID := vaa.ChainID(binary.LittleEndian.Uint16(result))
+
+	nativeChainCache[tokenAddressAsKey] = chainID
+
+	return chainID, nil
+}
+
+func (tv *TransferVerifier[ethClient, Connector]) isWrappedAsset(
+	addr common.Address,
+	// chainID common.Address,
+) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), RPC_TIMEOUT)
+	defer cancel()
+
+	tokenAddressAsKey := addr.Hex()
+
+	// If the token address already exists in the isWrappedCache mapping the
+	// cached value can be returned.
+	if wrapped, exists := isWrappedCache[tokenAddressAsKey]; exists {
+		tv.logger.Debug("asset found in isWrapped cache, returning")
+		return wrapped, nil
+	}
+
+	// Prepare eth_call data: 4-byte signature + 32 byte address
+	calldata := make([]byte, 4 + EVM_WORD_LENGTH)
+	copy(calldata, TOKEN_BRIDGE_IS_WRAPPED_ASSET_SIGNATURE)
+	copy(calldata[4:], common.LeftPadBytes(addr.Bytes(), EVM_WORD_LENGTH))
+
+	ethCallMsg := ethereum.CallMsg{
+		To:   &tv.Addresses.TokenBridgeAddr,
+		Data: calldata,
+	}
+
+	tv.logger.Debug("calling isWrappedAsset()", zap.String("tokenAddress", addr.String()))
+
+	result, err := tv.client.CallContract(ctx, ethCallMsg, nil)
+
+	if err != nil {
+		// TODO add more info here
+		tv.logger.Warn("isWrappedAsset() call error", zap.Error(err))
+		return false, err
+	}
+	if len(result) < EVM_WORD_LENGTH {
+		tv.logger.Warn("isWrappedAsset() result length is too small", zap.String("result", fmt.Sprintf("%x", result)))
+		return false, err
+	}
+	tv.logger.Debug("isWrappedAsset result", zap.String("result", fmt.Sprintf("%x", result)))
+
+	// The boolean result will be returned as a byte string with length
+	// equal to EVM_WORD_LENGTH. Grab the last byte.
+	// TODO is 1 == true? Does this work?
+	wrapped := result[EVM_WORD_LENGTH-1] == 1
+
+	isWrappedCache[tokenAddressAsKey] = wrapped
+
+	return wrapped, nil
 }
 
 // Determine whether a log is relevant for the addresses passed into TVAddresses. Returns a string of the form "address-chain" for relevant entries.
@@ -587,6 +706,9 @@ func validate[L TransferLog](tLog TransferLog) error {
 		// (e.g. UniswapV2) and may have a valid reason to set this
 		// field to zero.
 
+		// TODO ensure that, if the Token is wrapped, that its tokenchain is not equal to NATIVE_CHAIN_ID.
+		// at this point, this should've been updated
+
 		if cmp(log.Emitter(), log.TokenAddress) != 0 {
 			return &InvalidLogError{Msg: "deposit emitter is not equal to its token address"}
 		}
@@ -644,7 +766,8 @@ func validate[L TransferLog](tLog TransferLog) error {
 func (tv *TransferVerifier[evmClient, connector]) getDecimals(
 	tokenAddress common.Address,
 ) (decimals uint8, err error) {
-	ctx := context.TODO()
+	ctx, cancel := context.WithTimeout(context.Background(), RPC_TIMEOUT)
+	defer cancel()
 
 	// First check if this token's decimals is stored in cache
 	if _, exists := decimalsCache[tokenAddress]; exists {
