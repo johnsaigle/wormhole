@@ -68,7 +68,6 @@ const (
 	TOPICS_COUNT_DEPOSIT = 2
 )
 
-
 const (
 	RPC_TIMEOUT = 10 * time.Second
 )
@@ -95,13 +94,12 @@ type TransferVerifier[E evmClient, C connector] struct {
 
 func NewTransferVerifier(connector connectors.Connector, tvAddrs *TVAddresses, logger *zap.Logger) *TransferVerifier[*ethClient.Client, connectors.Connector] {
 	return &TransferVerifier[*ethClient.Client, connectors.Connector]{
-		Addresses: tvAddrs,
+		Addresses:    tvAddrs,
 		ethConnector: connector,
 		logger:       *logger,
 		client:       connector.Client(),
 	}
 }
-
 
 type connector interface {
 	ParseLogMessagePublished(log types.Log) (*ethabi.AbiLogMessagePublished, error)
@@ -257,6 +255,37 @@ func (d *NativeDeposit) String() string {
 	)
 }
 
+func DepositFrom(log *types.Log) (deposit *NativeDeposit, err error) {
+	dest, amount := parseWNativeDepositEvent(log.Topics, log.Data)
+
+	if amount == nil {
+		return deposit, errors.New("could not parse Deposit from log")
+	}
+
+	deposit = &NativeDeposit{
+		TokenAddress: log.Address,
+		TokenChain:   NATIVE_CHAIN_ID, // always equal to Ethereum for native deposits
+		Receiver:     dest,
+		Amount:       amount,
+	}
+	return
+}
+
+// parseWNativeDepositEvent parses an event for a deposit of a wrapped version of the chain's native asset, i.e. WETH for Ethereum.
+func parseWNativeDepositEvent(logTopics []common.Hash, logData []byte) (destination common.Address, amount *big.Int) {
+
+	// https://etherscan.io/token/0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2#code#L29
+	// event  Deposit(address indexed dst, uint wad);
+	if len(logData) != EVM_WORD_LENGTH || len(logTopics) != TOPICS_COUNT_DEPOSIT {
+		return common.Address{}, nil
+	}
+
+	destination = common.BytesToAddress(logTopics[1][:])
+	amount = new(big.Int).SetBytes(logData[:])
+
+	return destination, amount
+}
+
 // Abstraction over an ERC20 Transfer event.
 type ERC20Transfer struct {
 	// The address of the token. Also equivalent to the Emitter of the event.
@@ -306,6 +335,52 @@ func (t *ERC20Transfer) String() string {
 		t.To.String(),
 		t.Amount.String(),
 	)
+}
+
+func ERC20TransferFrom(log *types.Log) (transfer *ERC20Transfer, err error) {
+	from, to, amount := parseERC20TransferEvent(log.Topics, log.Data)
+
+	emptyAddr := common.Address{}
+
+	if cmp(from, emptyAddr) == 0 {
+		return transfer, errors.New("could not parse ERC20 Transfer from log: address From is empty")
+	}
+	if cmp(to, emptyAddr) == 0 {
+		return transfer, errors.New("could not parse ERC20 Transfer from log: address To is empty")
+	}
+	if amount == nil {
+		return transfer, errors.New("could not parse ERC20 Transfer from log: nil Amount")
+	}
+
+	transfer = &ERC20Transfer{
+		TokenAddress: log.Address,
+		// Initially, set Token's chain to this chain. This will be updated by making an RPC call later.
+		TokenChain: NATIVE_CHAIN_ID,
+		From:       from,
+		To:         to,
+		Amount:     amount,
+	}
+	return
+}
+
+// This function parses an ERC20 transfer event from a log topic and data.
+// It verifies the input lengths, extracts the 'from', 'to' and amount fields from the log data,
+// and returns these values as common.Address and big.Int types.
+// - Error handling: The function checks if the log data and topic lengths are correct before attempting to parse them.
+// - Input validation: The function verifies that the input lengths match expected values, preventing potential attacks or errors.
+func parseERC20TransferEvent(logTopics []common.Hash, logData []byte) (from common.Address, to common.Address, amount *big.Int) {
+
+	// https://github.com/OpenZeppelin/openzeppelin-contracts/blob/6e224307b44bc4bd0cb60d408844e028cfa3e485/contracts/token/ERC20/IERC20.sol#L16
+	// event Transfer(address indexed from, address indexed to, uint256 value)
+	if len(logData) != EVM_WORD_LENGTH || len(logTopics) != TOPICS_COUNT_TRANSFER {
+		return common.Address{}, common.Address{}, nil
+	}
+
+	from = common.BytesToAddress(logTopics[1][:])
+	to = common.BytesToAddress(logTopics[2][:])
+	amount = new(big.Int).SetBytes(logData[:])
+
+	return
 }
 
 // Abstraction over a LogMessagePublished event emitted by the core bridge.
@@ -366,6 +441,30 @@ type TransferReceipt struct {
 	Transfers *[]*ERC20Transfer
 	// There must be at least one LogMessagePublished for a valid receipt.
 	MessagePublicatons *[]*LogMessagePublished
+}
+
+func (r *TransferReceipt) String() string {
+	dStr := ""
+	for _, d := range *r.Deposits {
+		dStr += d.String()
+	}
+
+	tStr := ""
+	for _, t := range *r.Transfers {
+		tStr += t.String()
+	}
+
+	mStr := ""
+	for _, m := range *r.Transfers {
+		mStr += m.String()
+	}
+
+	return fmt.Sprintf(
+		"receipt: {deposits=%s transfers=%s messages=%s}",
+		dStr,
+		tStr,
+		mStr,
+	)
 }
 
 // Summary of a processed TransferReceipt. Contains information about relevant
@@ -429,7 +528,7 @@ type TransferDetails struct {
 	// Amount as sent in the raw payload
 	AmountRaw *big.Int
 	// Original chain where the token was minted.
-	TokenChain       vaa.ChainID
+	TokenChain vaa.ChainID
 	// Original address of the token when minted natively. Corresponds to the "unwrapped" address in the token bridge.
 	OriginAddress common.Address
 	// Raw token address parsed from the payload. May be wrapped.
@@ -481,9 +580,9 @@ func (tv *TransferVerifier[ethClient, connector]) unwrapIfWrapped(
 		To:   &tv.Addresses.TokenBridgeAddr,
 		Data: calldata,
 	}
-	tv.logger.Debug("calling wrappedAsset", 
+	tv.logger.Debug("calling wrappedAsset",
 		zap.Uint16("tokenChain", uint16(tokenChain)),
-		zap.String("tokenChainString", tokenChain.String()), 
+		zap.String("tokenChainString", tokenChain.String()),
 		zap.String("tokenAddress", fmtString.Sprintf("%x", tokenAddress)),
 		zap.String("callData", fmtString.Sprintf("%x", calldata)))
 
@@ -497,7 +596,7 @@ func (tv *TransferVerifier[ethClient, connector]) unwrapIfWrapped(
 	tokenAddressNative := common.BytesToAddress(result)
 	wrappedCache[tokenAddressAsKey] = tokenAddressNative
 
-	tv.logger.Debug("got wrappedAsset result", 
+	tv.logger.Debug("got wrappedAsset result",
 		zap.String("tokenAddressNative", fmt.Sprintf("%x", tokenAddressNative)))
 
 	return tokenAddressNative, nil
@@ -541,9 +640,9 @@ func (tv *TransferVerifier[ethClient, Connector]) chainId(
 		return 0, err
 	}
 	if len(result) < EVM_WORD_LENGTH {
-		tv.logger.Warn("result for chainId has insufficient length", 
+		tv.logger.Warn("result for chainId has insufficient length",
 			zap.Int("length", len(result)),
-			zap.String("result",fmt.Sprintf("%x", result)))
+			zap.String("result", fmt.Sprintf("%x", result)))
 		return 0, errors.New("result for chainId has insufficient length")
 	}
 
@@ -572,7 +671,7 @@ func (tv *TransferVerifier[ethClient, Connector]) isWrappedAsset(
 	}
 
 	// Prepare eth_call data: 4-byte signature + 32 byte address
-	calldata := make([]byte, 4 + EVM_WORD_LENGTH)
+	calldata := make([]byte, 4+EVM_WORD_LENGTH)
 	copy(calldata, TOKEN_BRIDGE_IS_WRAPPED_ASSET_SIGNATURE)
 	copy(calldata[4:], common.LeftPadBytes(addr.Bytes(), EVM_WORD_LENGTH))
 
@@ -744,7 +843,6 @@ func validate[L TransferLog](tLog TransferLog) error {
 		// if bytes.Compare(log.TransferDetails.OriginAddressRaw, ZERO_ADDRESS_VAA.Bytes()) == 0 {
 		// 	return &InvalidLogError{Msg: "origin address raw cannot be zero"}
 		// }
-
 
 		if log.TransferDetails.AmountRaw == nil {
 			return &InvalidLogError{Msg: "amountRaw cannot be nil"}
