@@ -27,59 +27,9 @@ var (
 	coreBridgeAddr  = common.HexToAddress("0x98f3c9e6E3fAce36bAAd05FE09d375Ef1464288B")
 	tokenBridgeAddr = common.HexToAddress("0x3ee18B2214AFF97000D974cf647E7C347E8fa585")
 	nativeAddr      = common.HexToAddress("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2") // weth
-	usdcAddr       = common.HexToAddress("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48") 
+	usdcAddr        = common.HexToAddress("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")
 	eoaAddrGeth     = common.HexToAddress("0xbeefcafe")
 	eoaAddrVAA, _   = vaa.BytesToAddress([]byte{0xbe, 0xef, 0xca, 0xfe})
-)
-
-// Typical receipt logs that can be included in various receipt test cases
-var (
-	transferLog = &types.Log{
-		Address: usdcAddr,
-		Topics: []common.Hash{
-			// Transfer(address,address,uint256)
-			common.HexToHash(EVENTHASH_ERC20_TRANSFER),
-			// from
-			eoaAddrGeth.Hash(),
-			// to
-			tokenBridgeAddr.Hash(),
-		},
-		// amount
-		Data: common.LeftPadBytes([]byte{0x01}, 32),
-	}
-
-	logMessagedPublishedLog = &types.Log{
-		Address: coreBridgeAddr,
-		Topics: []common.Hash{
-			// LogMessagePublished(address indexed sender, uint64 sequence, uint32 nonce, bytes payload, uint8 consistencyLevel);
-			common.HexToHash(EVENTHASH_WORMHOLE_LOG_MESSAGE_PUBLISHED),
-			// sender
-			tokenBridgeAddr.Hash(),
-		},
-		Data: receiptData(big.NewInt(1)),
-	}
-)
-
-var (
-	validTransferReceipt = &types.Receipt{
-		Status: types.ReceiptStatusSuccessful,
-		Logs: []*types.Log{
-			transferLog,
-			logMessagedPublishedLog,
-		},
-	}
-	// Invalid: no erc20 transfer, so amount out > amount in
-	// invalidTransferReceipt = &types.Receipt{
-	// 	Status: types.ReceiptStatusSuccessful,
-	// 	Logs: []*types.Log{
-	// 		logMessagedPublishedLog,
-	// 	},
-	// }
-	// TODO: Invalid: erc20 transfer amount is less than payload amount, so amount out > amount in
-	// invalidTransferReceipt = &types.Receipt{
-	// 	Status:            types.ReceiptStatusSuccessful,
-	// 	Logs: []*types.Log{logMessagedPublishedLog},
-	// }
 )
 
 type mockConnections struct {
@@ -104,6 +54,7 @@ func (m *mockClient) CallContract(ctx context.Context, msg ethereum.CallMsg, blo
 type mockConnector struct{}
 
 // TODO add a helper method to actually populate the results of the mocked method
+// TODO add different results here so we can test different values
 func (c *mockConnector) ParseLogMessagePublished(log types.Log) (*ethabi.AbiLogMessagePublished, error) {
 	// add mock data
 	return &ethAbi.AbiLogMessagePublished{
@@ -138,6 +89,59 @@ func setup() *mockConnections {
 	}
 }
 
+// Define some transfer logs to make it easier to write tests for parsing receipts.
+// Typical receipt logs that can be included in various receipt test cases
+var (
+	// A valid transfer log for an ERC20 transfer event.
+	transferLog = &types.Log{
+		Address: usdcAddr,
+		Topics: []common.Hash{
+			// Transfer(address,address,uint256)
+			common.HexToHash(EVENTHASH_ERC20_TRANSFER),
+			// from
+			eoaAddrGeth.Hash(),
+			// to
+			tokenBridgeAddr.Hash(),
+		},
+		// amount
+		Data: common.LeftPadBytes([]byte{0x01}, 32),
+	}
+
+	// A valid transfer log for a log message published event.
+	validLogMessagedPublishedLog = &types.Log{
+		Address: coreBridgeAddr,
+		Topics: []common.Hash{
+			// LogMessagePublished(address indexed sender, uint64 sequence, uint32 nonce, bytes payload, uint8 consistencyLevel);
+			common.HexToHash(EVENTHASH_WORMHOLE_LOG_MESSAGE_PUBLISHED),
+			// sender
+			tokenBridgeAddr.Hash(),
+		},
+		Data: receiptData(big.NewInt(255)),
+	}
+)
+
+var (
+	validTransferReceipt = &types.Receipt{
+		Status: types.ReceiptStatusSuccessful,
+		Logs: []*types.Log{
+			transferLog,
+			validLogMessagedPublishedLog,
+		},
+	}
+	// Invalid: no erc20 transfer, so amount out > amount in
+	// invalidTransferReceipt = &types.Receipt{
+	// 	Status: types.ReceiptStatusSuccessful,
+	// 	Logs: []*types.Log{
+	// 		logMessagedPublishedLog,
+	// 	},
+	// }
+	// TODO: Invalid: erc20 transfer amount is less than payload amount, so amount out > amount in
+	// invalidTransferReceipt = &types.Receipt{
+	// 	Status:            types.ReceiptStatusSuccessful,
+	// 	Logs: []*types.Log{logMessagedPublishedLog},
+	// }
+)
+
 func TestParseReceiptHappyPath(t *testing.T) {
 	mocks := setup()
 	defer mocks.ctxCancel()
@@ -165,11 +169,11 @@ func TestParseReceiptHappyPath(t *testing.T) {
 						EventEmitter: coreBridgeAddr,
 						MsgSender:    tokenBridgeAddr,
 						TransferDetails: &TransferDetails{
-							PayloadType:     TransferTokens,
+							PayloadType:      TransferTokens,
 							OriginAddressRaw: common.LeftPadBytes(usdcAddr.Bytes(), EVM_WORD_LENGTH),
-							TokenChain:      2, // Wormhole ethereum chain ID
-							AmountRaw:       big.NewInt(1),
-							TargetAddress:   eoaAddrVAA,
+							TokenChain:       2, // Wormhole ethereum chain ID
+							AmountRaw:        big.NewInt(1),
+							TargetAddress:    eoaAddrVAA,
 							// Amount and OriginAddress are not populated by ParseReceipt
 							// Amount: big.NewInt(1),
 							// OriginAddress: erc20Addr,
@@ -224,6 +228,40 @@ func TestParseReceiptErrors(t *testing.T) {
 	mocks := setup()
 	defer mocks.ctxCancel()
 
+	// Create a log containing an invalid deposit log
+	badDepositLog := *transferLog
+	badDepositLog.Topics = []common.Hash{
+		common.HexToHash(EVENTHASH_WETH_DEPOSIT),
+		// Omit essential topics
+	}
+
+	// Create a log containing an invalid transfer log
+	badTransferLog := *transferLog
+	badTransferLog.Topics = []common.Hash{
+		common.HexToHash(EVENTHASH_ERC20_TRANSFER),
+		// Omit essential topics
+	}
+
+	// Create a log containing a LogMessagePublished event without any payload
+	emptyPayloadLogMessagePublishedLog := *validLogMessagedPublishedLog
+	emptyPayloadLogMessagePublishedLog.Data = []byte{}
+
+	// Create a receipt with the wrong payload type (not a token transfer).
+	wrongPayloadTypeLogMessagePublishedLog := types.Log{
+		Address: coreBridgeAddr,
+		Topics: []common.Hash{
+			// LogMessagePublished(address indexed sender, uint64 sequence, uint32 nonce, bytes payload, uint8 consistencyLevel);
+			common.HexToHash(EVENTHASH_WORMHOLE_LOG_MESSAGE_PUBLISHED),
+			// sender
+			tokenBridgeAddr.Hash(),
+		},
+		Data: receiptData(big.NewInt(1).SetBytes([]byte{0xaa})),
+	}
+	// The LogMessagePublished payload type occurs in the 6th EVM word slot, and is left-padded with zeroes.
+	// Note that the value is 0-indexed
+	payloadTypeOffset := EVM_WORD_LENGTH * 5
+	wrongPayloadTypeLogMessagePublishedLog.Data[payloadTypeOffset] = 0x02
+
 	tests := map[string]struct {
 		receipt *types.Receipt
 	}{
@@ -231,16 +269,49 @@ func TestParseReceiptErrors(t *testing.T) {
 			receipt: &types.Receipt{
 				Status: types.ReceiptStatusFailed,
 				Logs: []*types.Log{
-					logMessagedPublishedLog,
+					validLogMessagedPublishedLog,
 				},
 			},
 		},
-		"empty logs": {
+		"no logs": {
 			receipt: &types.Receipt{
 				Status: types.ReceiptStatusSuccessful,
 				Logs:   []*types.Log{},
 			},
 		},
+		"invalid deposit log in receipt": {
+			receipt: &types.Receipt{
+				Status: types.ReceiptStatusSuccessful,
+				Logs: []*types.Log{
+					&badDepositLog,
+				},
+			},
+		},
+		"invalid transfer log in receipt": {
+			receipt: &types.Receipt{
+				Status: types.ReceiptStatusSuccessful,
+				Logs: []*types.Log{
+					&badTransferLog,
+				},
+			},
+		},
+		"LogMessagePublished with empty payload": {
+			receipt: &types.Receipt{
+				Status: types.ReceiptStatusSuccessful,
+				Logs: []*types.Log{
+					&emptyPayloadLogMessagePublishedLog,
+				},
+			},
+		},
+		// TODO: Need to create a different mock for ParseLogMessagePublished in order to test this
+		// "LogMessagePublished with wrong payload type": {
+		// 	receipt: &types.Receipt{
+		// 		Status: types.ReceiptStatusSuccessful,
+		// 		Logs: []*types.Log{
+		// 			&wrongPayloadTypeLogMessagePublishedLog,
+		// 		},
+		// 	},
+		// },
 	}
 	for name, test := range tests {
 		test := test // NOTE: uncomment for Go < 1.22, see /doc/faq#closures_and_goroutines
@@ -402,13 +473,13 @@ func TestProcessReceipt(t *testing.T) {
 						EventEmitter: coreBridgeAddr,
 						MsgSender:    tokenBridgeAddr,
 						TransferDetails: &TransferDetails{
-							PayloadType:     TransferTokens,
+							PayloadType:      TransferTokens,
 							OriginAddressRaw: nativeAddr.Bytes(),
-							OriginAddress:   nativeAddr,
-							TargetAddress:   eoaAddrVAA,
-							TokenChain:      2,
-							AmountRaw:       big.NewInt(123),
-							Amount:          big.NewInt(123),
+							OriginAddress:    nativeAddr,
+							TargetAddress:    eoaAddrVAA,
+							TokenChain:       2,
+							AmountRaw:        big.NewInt(123),
+							Amount:           big.NewInt(123),
 						},
 					},
 				},
@@ -433,13 +504,13 @@ func TestProcessReceipt(t *testing.T) {
 						EventEmitter: coreBridgeAddr,
 						MsgSender:    tokenBridgeAddr,
 						TransferDetails: &TransferDetails{
-							PayloadType:     TransferTokens,
+							PayloadType:      TransferTokens,
 							OriginAddressRaw: usdcAddr.Bytes(),
-							OriginAddress:   usdcAddr,
-							TokenChain:      2,
-							TargetAddress:   eoaAddrVAA,
-							AmountRaw:       big.NewInt(456),
-							Amount:          big.NewInt(456),
+							OriginAddress:    usdcAddr,
+							TokenChain:       2,
+							TargetAddress:    eoaAddrVAA,
+							AmountRaw:        big.NewInt(456),
+							Amount:           big.NewInt(456),
 						},
 					},
 				},
@@ -463,13 +534,13 @@ func TestProcessReceipt(t *testing.T) {
 						EventEmitter: coreBridgeAddr,
 						MsgSender:    tokenBridgeAddr,
 						TransferDetails: &TransferDetails{
-							PayloadType:     TransferTokens,
+							PayloadType:      TransferTokens,
 							OriginAddressRaw: nativeAddr.Bytes(),
-							TokenChain:      2,
-							OriginAddress:   nativeAddr,
-							TargetAddress:   eoaAddrVAA,
-							AmountRaw:       big.NewInt(321),
-							Amount:          big.NewInt(321),
+							TokenChain:       2,
+							OriginAddress:    nativeAddr,
+							TargetAddress:    eoaAddrVAA,
+							AmountRaw:        big.NewInt(321),
+							Amount:           big.NewInt(321),
 						},
 					},
 				},
@@ -494,13 +565,13 @@ func TestProcessReceipt(t *testing.T) {
 						EventEmitter: coreBridgeAddr,
 						MsgSender:    tokenBridgeAddr,
 						TransferDetails: &TransferDetails{
-							PayloadType:     TransferTokens,
+							PayloadType:      TransferTokens,
 							OriginAddressRaw: usdcAddr.Bytes(),
-							OriginAddress:   usdcAddr,
-							TargetAddress:   eoaAddrVAA,
-							TokenChain:      2,
-							AmountRaw:       big.NewInt(321),
-							Amount:          big.NewInt(321),
+							OriginAddress:    usdcAddr,
+							TargetAddress:    eoaAddrVAA,
+							TokenChain:       2,
+							AmountRaw:        big.NewInt(321),
+							Amount:           big.NewInt(321),
 						},
 					},
 				},
@@ -524,13 +595,13 @@ func TestProcessReceipt(t *testing.T) {
 						EventEmitter: coreBridgeAddr,
 						MsgSender:    tokenBridgeAddr,
 						TransferDetails: &TransferDetails{
-							PayloadType:     TransferTokens,
+							PayloadType:      TransferTokens,
 							OriginAddressRaw: nativeAddr.Bytes(),
-							OriginAddress:   nativeAddr,
-							TargetAddress:   eoaAddrVAA,
-							TokenChain:      vaa.ChainIDEthereum,
-							AmountRaw:       big.NewInt(11),
-							Amount:          big.NewInt(11),
+							OriginAddress:    nativeAddr,
+							TargetAddress:    eoaAddrVAA,
+							TokenChain:       vaa.ChainIDEthereum,
+							AmountRaw:        big.NewInt(11),
+							Amount:           big.NewInt(11),
 						},
 					},
 				},
@@ -555,13 +626,13 @@ func TestProcessReceipt(t *testing.T) {
 						EventEmitter: coreBridgeAddr,
 						MsgSender:    tokenBridgeAddr,
 						TransferDetails: &TransferDetails{
-							PayloadType:     TransferTokens,
+							PayloadType:      TransferTokens,
 							OriginAddressRaw: nativeAddr.Bytes(),
-							OriginAddress:   nativeAddr,
-							TargetAddress:   eoaAddrVAA,
-							TokenChain:      2,
-							AmountRaw:       big.NewInt(2),
-							Amount:          big.NewInt(2),
+							OriginAddress:    nativeAddr,
+							TargetAddress:    eoaAddrVAA,
+							TokenChain:       2,
+							AmountRaw:        big.NewInt(2),
+							Amount:           big.NewInt(2),
 						},
 					},
 				},
@@ -586,13 +657,13 @@ func TestProcessReceipt(t *testing.T) {
 						EventEmitter: coreBridgeAddr,
 						MsgSender:    tokenBridgeAddr,
 						TransferDetails: &TransferDetails{
-							PayloadType:     TransferTokens,
+							PayloadType:      TransferTokens,
 							OriginAddressRaw: nativeAddr.Bytes(),
-							OriginAddress:   nativeAddr,
-							TargetAddress:   eoaAddrVAA,
-							TokenChain:      2,
-							AmountRaw:       big.NewInt(2),
-							Amount:          big.NewInt(2),
+							OriginAddress:    nativeAddr,
+							TargetAddress:    eoaAddrVAA,
+							TokenChain:       2,
+							AmountRaw:        big.NewInt(2),
+							Amount:           big.NewInt(2),
 						},
 					},
 				},
@@ -624,8 +695,8 @@ func TestProcessReceipt(t *testing.T) {
 
 func receiptData(payloadAmount *big.Int) (data []byte) {
 	// non-payload part of the receipt and ABI metadata fields
-	seq := common.LeftPadBytes([]byte{0x00}, 32)
-	nonce := common.LeftPadBytes([]byte{0x00}, 32)
+	seq := common.LeftPadBytes([]byte{0x11}, 32)
+	nonce := common.LeftPadBytes([]byte{0x22}, 32)
 	offset := common.LeftPadBytes([]byte{0x80}, 32)
 	consistencyLevel := common.LeftPadBytes([]byte{0x01}, 32)
 	payloadLength := common.LeftPadBytes([]byte{0x85}, 32) // 133 for transferTokens

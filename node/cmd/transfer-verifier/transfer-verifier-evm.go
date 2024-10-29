@@ -397,6 +397,9 @@ func (tv *TransferVerifier[evmClient, connector]) ParseReceipt(
 	receipt *types.Receipt,
 ) (*TransferReceipt, error) {
 	// Sanity checks. Shouldn't be necessary but no harm
+	if receipt == nil {
+		return &TransferReceipt{}, errors.New("receipt parameter is nil")
+	}
 	if receipt.Status != 1 {
 		return &TransferReceipt{}, errors.New("non-success transaction status")
 	}
@@ -408,42 +411,63 @@ func (tv *TransferVerifier[evmClient, connector]) ParseReceipt(
 	var transfers []*ERC20Transfer
 	var messagePublications []*LogMessagePublished
 
+	// Aggregate all errors without returning early
+	var receiptErr error
+
 	for _, log := range receipt.Logs {
 		switch log.Topics[0] {
 		case common.HexToHash(EVENTHASH_WETH_DEPOSIT):
-			deposit, err := DepositFrom(log)
-			if err != nil {
+			deposit, depositErr := DepositFrom(log)
+
+			if depositErr != nil {
 				tv.logger.Error("error when parsing Deposit from log",
-					zap.Error(err),
+					zap.Error(depositErr),
 					zap.String("txHash", log.TxHash.String()),
 				)
+				receiptErr = errors.Join(receiptErr, depositErr)
 				continue
 			}
+
 			tv.logger.Debug("adding deposit", zap.String("deposit", deposit.String()))
 			deposits = append(deposits, deposit)
 		case common.HexToHash(EVENTHASH_ERC20_TRANSFER):
-			transfer, err := ERC20TransferFrom(log)
-			if err != nil {
+			transfer, transferErr := ERC20TransferFrom(log)
+
+			if transferErr != nil {
 				tv.logger.Error("error when parsing ERC20 Transfer from log",
-					zap.Error(err),
+					zap.Error(transferErr),
 					zap.String("txHash", log.TxHash.String()),
 				)
+				receiptErr = errors.Join(receiptErr, transferErr)
 				continue
 			}
+
 			tv.logger.Debug("adding transfer", zap.String("transfer", transfer.String()))
 			transfers = append(transfers, transfer)
 		case common.HexToHash(EVENTHASH_WORMHOLE_LOG_MESSAGE_PUBLISHED):
-			logMessagePublished, err := tv.ethConnector.ParseLogMessagePublished(*log)
-			if err != nil {
-				tv.logger.Fatal("failed to parse LogMessagePublished event")
+			if len(log.Data) == 0 {
+				// tv.logger.Error("receipt data has length 0")
+				receiptErr = errors.Join(receiptErr, errors.New("receipt data has length 0"))
+				continue
+			}
+
+
+			logMessagePublished, parseLogErr := tv.ethConnector.ParseLogMessagePublished(*log)
+			if parseLogErr != nil {
+				tv.logger.Error("failed to parse LogMessagePublished event")
+				receiptErr = errors.Join(receiptErr, parseLogErr)
+				continue
 			}
 
 			// If there is no payload, then there's no point in further processing.
 			// This should never happen.
 			if len(logMessagePublished.Payload) == 0 {
+				emptyErr := errors.New("a LogMessagePayload event from the token bridge was received with a zero-sized payload")
 				tv.logger.Error(
-					"a LogMessagePayload event from the token bridge was received with a zero-sized payload",
+					"issue parsing receipt",
+					zap.Error(emptyErr),
 					zap.String("txhash", log.TxHash.String()))
+				receiptErr = errors.Join(receiptErr, emptyErr)
 				continue
 			}
 
@@ -464,10 +488,17 @@ func (tv *TransferVerifier[evmClient, connector]) ParseReceipt(
 			}
 
 			// Validation is complete. Now, parse the raw bytes of the payload into a TransferDetails instance.
-			transferDetails, err := parseLogMessagePublishedPayload(logMessagePublished.Payload)
-			if err != nil {
-				return nil, err
+			transferDetails, parsePayloadErr := parseLogMessagePublishedPayload(logMessagePublished.Payload)
+			if parsePayloadErr != nil {
+				tv.logger.Error(
+					"issue parsing receipt payload",
+					zap.Error(parsePayloadErr),
+					zap.String("txhash", log.TxHash.String()))
+				receiptErr = errors.Join(receiptErr, parsePayloadErr)
+				continue
 			}
+
+			// If everything went well, append the message publication
 			messagePublications = append(messagePublications, &LogMessagePublished{
 				EventEmitter:    log.Address,
 				MsgSender:       logMessagePublished.Sender,
@@ -475,6 +506,14 @@ func (tv *TransferVerifier[evmClient, connector]) ParseReceipt(
 			})
 
 		}
+	}
+
+	if len(messagePublications) == 0 {
+		receiptErr = errors.Join(receiptErr, errors.New("parsed receipts but received no LogMessagePublished events")) 
+	}
+
+	if receiptErr != nil {
+		return &TransferReceipt{}, receiptErr
 	}
 
 	return &TransferReceipt{
