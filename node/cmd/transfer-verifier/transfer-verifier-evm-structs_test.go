@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/wormhole-foundation/wormhole/sdk/vaa"
@@ -708,6 +709,94 @@ func TestVAAFromAddr(t *testing.T) {
 			res := VAAAddrFrom(test.input)
 			assert.Equal(t, test.expected, res)
 			assert.Zero(t, bytes.Compare(res[:], common.LeftPadBytes(test.input.Bytes(), EVM_WORD_LENGTH)))
+		})
+	}
+
+}
+func TestDepositFrom(t *testing.T) {
+
+	t.Parallel()
+
+	tests := map[string]struct {
+		log      types.Log
+		expected *NativeDeposit
+	}{
+		"valid deposit": {
+			log: types.Log{
+				Address: WETH_ADDRESS,
+				Topics: []common.Hash{
+					common.HexToHash(EVENTHASH_WETH_DEPOSIT),
+					// Receiver
+					common.HexToHash(tokenBridgeAddr.String()),
+				},
+				TxHash: common.BytesToHash([]byte{0x01}),
+				Data:   common.LeftPadBytes(big.NewInt(100).Bytes(), EVM_WORD_LENGTH),
+			},
+			expected: &NativeDeposit{
+				Receiver:     tokenBridgeAddr,
+				TokenAddress: WETH_ADDRESS,
+				// Default token chain for a transfer.
+				TokenChain: NATIVE_CHAIN_ID,
+				Amount:     big.NewInt(100),
+			},
+		},
+	}
+
+	for name, test := range tests {
+		test := test // NOTE: uncomment for Go < 1.22, see /doc/faq#closures_and_goroutines
+		t.Run(name, func(t *testing.T) {
+			t.Parallel() // marks each test case as capable of running in parallel with each other
+			t.Log(name)
+
+			deposit, err := DepositFrom(&test.log)
+			assert.Equal(t, test.expected, deposit)
+			require.NoError(t, err)
+		})
+	}
+
+}
+
+func TestParseERC20TransferFrom(t *testing.T) {
+
+	t.Parallel()
+
+	tests := map[string]struct {
+		log      types.Log
+		expected *ERC20Transfer
+	}{
+		"valid transfer": {
+			log: types.Log{
+				Address: usdcAddr,
+				Topics: []common.Hash{
+					common.HexToHash(EVENTHASH_ERC20_TRANSFER),
+					// From
+					common.HexToHash(eoaAddrGeth.String()),
+					// To
+					common.HexToHash(tokenBridgeAddr.String()),
+				},
+				TxHash: common.BytesToHash([]byte{0x01}),
+				Data:   common.LeftPadBytes(big.NewInt(100).Bytes(), EVM_WORD_LENGTH),
+			},
+			expected: &ERC20Transfer{
+				From:         eoaAddrGeth,
+				To:           tokenBridgeAddr,
+				TokenAddress: usdcAddr,
+				// Default token chain for a transfer.
+				TokenChain: NATIVE_CHAIN_ID,
+				Amount:     big.NewInt(100),
+			},
+		},
+	}
+
+	for name, test := range tests {
+		test := test // NOTE: uncomment for Go < 1.22, see /doc/faq#closures_and_goroutines
+		t.Run(name, func(t *testing.T) {
+			t.Parallel() // marks each test case as capable of running in parallel with each other
+			t.Log(name)
+
+			transfer, err := ERC20TransferFrom(&test.log)
+			assert.Equal(t, test.expected, transfer)
+			require.NoError(t, err)
 		})
 	}
 
