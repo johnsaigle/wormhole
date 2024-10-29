@@ -220,10 +220,10 @@ func TestValidateDeposit(t *testing.T) {
 	t.Parallel()
 
 	invalidDeposits := map[string]struct {
-		input NativeDeposit
+		deposit NativeDeposit
 	}{
 		"invalid: zero-value for TokenAddress": {
-			input: NativeDeposit{
+			deposit: NativeDeposit{
 				// TokenAddress:
 				TokenChain: NATIVE_CHAIN_ID,
 				Receiver:   tokenBridgeAddr,
@@ -231,7 +231,7 @@ func TestValidateDeposit(t *testing.T) {
 			},
 		},
 		"invalid: zero-value for TokenChain": {
-			input: NativeDeposit{
+			deposit: NativeDeposit{
 				TokenAddress: usdcAddr,
 				// TokenChain:
 				Receiver: tokenBridgeAddr,
@@ -239,7 +239,7 @@ func TestValidateDeposit(t *testing.T) {
 			},
 		},
 		"invalid: zero-value for Receiver": {
-			input: NativeDeposit{
+			deposit: NativeDeposit{
 				TokenAddress: usdcAddr,
 				TokenChain:   NATIVE_CHAIN_ID,
 				// Receiver:
@@ -247,7 +247,7 @@ func TestValidateDeposit(t *testing.T) {
 			},
 		},
 		"invalid: nil Amount": {
-			input: NativeDeposit{
+			deposit: NativeDeposit{
 				TokenAddress: usdcAddr,
 				TokenChain:   NATIVE_CHAIN_ID,
 				Receiver:     tokenBridgeAddr,
@@ -255,7 +255,7 @@ func TestValidateDeposit(t *testing.T) {
 			},
 		},
 		"invalid: negative Amount": {
-			input: NativeDeposit{
+			deposit: NativeDeposit{
 				TokenAddress: usdcAddr,
 				TokenChain:   NATIVE_CHAIN_ID,
 				Receiver:     tokenBridgeAddr,
@@ -270,16 +270,16 @@ func TestValidateDeposit(t *testing.T) {
 			t.Parallel() // marks each test case as capable of running in parallel with each other
 			t.Log(name)
 
-			err := validate[*NativeDeposit](&test.input)
+			err := validate[*NativeDeposit](&test.deposit)
 			require.Error(t, err)
 		})
 	}
 
 	validDeposits := map[string]struct {
-		input NativeDeposit
+		deposit NativeDeposit
 	}{
 		"valid": {
-			input: NativeDeposit{
+			deposit: NativeDeposit{
 				TokenAddress: nativeAddr,
 				TokenChain:   NATIVE_CHAIN_ID,
 				Receiver:     tokenBridgeAddr,
@@ -294,8 +294,15 @@ func TestValidateDeposit(t *testing.T) {
 			t.Parallel() // marks each test case as capable of running in parallel with each other
 			t.Log(name)
 
-			err := validate[*NativeDeposit](&test.input)
+			err := validate[*NativeDeposit](&test.deposit)
 			require.NoError(t, err)
+
+			// Test the interface
+			// The Sender() field for a Deposit must always be
+			// 'zero'. It only exists to satisfy the TransferLog interface.
+			assert.Equal(t, ZERO_ADDRESS_VAA.Bytes(), test.deposit.Sender().Bytes())
+			assert.Equal(t, test.deposit.TokenAddress, test.deposit.Emitter())
+			assert.NotEqual(t, ZERO_ADDRESS, test.deposit.OriginAddress())
 		})
 	}
 }
@@ -358,10 +365,10 @@ func TestValidateERC20Transfer(t *testing.T) {
 	}
 
 	validTransfers := map[string]struct {
-		input ERC20Transfer
+		transfer ERC20Transfer
 	}{
 		"valid": {
-			input: ERC20Transfer{
+			transfer: ERC20Transfer{
 				TokenAddress: usdcAddr,
 				TokenChain:   NATIVE_CHAIN_ID,
 				To:           tokenBridgeAddr,
@@ -370,7 +377,7 @@ func TestValidateERC20Transfer(t *testing.T) {
 			},
 		},
 		"valid: zero-value for From (possible Transfer event from non-ERC20 contract)": {
-			input: ERC20Transfer{
+			transfer: ERC20Transfer{
 				TokenAddress: usdcAddr,
 				TokenChain:   NATIVE_CHAIN_ID,
 				From:         ZERO_ADDRESS,
@@ -379,7 +386,7 @@ func TestValidateERC20Transfer(t *testing.T) {
 			},
 		},
 		"valid: zero-value for To (burning funds)": {
-			input: ERC20Transfer{
+			transfer: ERC20Transfer{
 				TokenAddress: usdcAddr,
 				TokenChain:   NATIVE_CHAIN_ID,
 				From:         tokenBridgeAddr,
@@ -395,8 +402,12 @@ func TestValidateERC20Transfer(t *testing.T) {
 			t.Parallel() // marks each test case as capable of running in parallel with each other
 			t.Log(name)
 
-			err := validate[*ERC20Transfer](&test.input)
+			err := validate[*ERC20Transfer](&test.transfer)
 			require.NoError(t, err)
+
+			// Test interface
+			assert.Equal(t, test.transfer.TokenAddress, test.transfer.Emitter())
+			assert.NotEqual(t, ZERO_ADDRESS, test.transfer.OriginAddress())
 		})
 	}
 }
@@ -405,10 +416,10 @@ func TestValidateLogMessagePublished(t *testing.T) {
 	t.Parallel()
 
 	invalidMessages := map[string]struct {
-		input LogMessagePublished
+		logMessagePublished LogMessagePublished
 	}{
 		"invalid: zero-value for EventEmitter": {
-			input: LogMessagePublished{
+			logMessagePublished: LogMessagePublished{
 				// EventEmitter: coreBridgeAddr,
 				MsgSender: tokenBridgeAddr,
 				TransferDetails: &TransferDetails{
@@ -423,7 +434,7 @@ func TestValidateLogMessagePublished(t *testing.T) {
 			},
 		},
 		"invalid: zero-value for MsgSender": {
-			input: LogMessagePublished{
+			logMessagePublished: LogMessagePublished{
 				EventEmitter: coreBridgeAddr,
 				// MsgSender:    tokenBridgeAddr,
 				TransferDetails: &TransferDetails{
@@ -438,7 +449,7 @@ func TestValidateLogMessagePublished(t *testing.T) {
 			},
 		},
 		"invalid: zero-value for TransferDetails": {
-			input: LogMessagePublished{
+			logMessagePublished: LogMessagePublished{
 				EventEmitter: coreBridgeAddr,
 				MsgSender:    tokenBridgeAddr,
 				// TransferDetails: &TransferDetails{
@@ -453,7 +464,7 @@ func TestValidateLogMessagePublished(t *testing.T) {
 			},
 		},
 		"invalid: zero-value for PayloadType": {
-			input: LogMessagePublished{
+			logMessagePublished: LogMessagePublished{
 				EventEmitter: coreBridgeAddr,
 				MsgSender:    tokenBridgeAddr,
 				TransferDetails: &TransferDetails{
@@ -468,7 +479,7 @@ func TestValidateLogMessagePublished(t *testing.T) {
 			},
 		},
 		"invalid: zero-value for OriginAddressRaw": {
-			input: LogMessagePublished{
+			logMessagePublished: LogMessagePublished{
 				EventEmitter: coreBridgeAddr,
 				MsgSender:    tokenBridgeAddr,
 				TransferDetails: &TransferDetails{
@@ -483,7 +494,7 @@ func TestValidateLogMessagePublished(t *testing.T) {
 			},
 		},
 		"invalid: zero-value for TokenChain": {
-			input: LogMessagePublished{
+			logMessagePublished: LogMessagePublished{
 				EventEmitter: coreBridgeAddr,
 				MsgSender:    tokenBridgeAddr,
 				TransferDetails: &TransferDetails{
@@ -514,7 +525,7 @@ func TestValidateLogMessagePublished(t *testing.T) {
 		// 	},
 		// },
 		"invalid: zero-value for TargetAddress": {
-			input: LogMessagePublished{
+			logMessagePublished: LogMessagePublished{
 				EventEmitter: coreBridgeAddr,
 				MsgSender:    tokenBridgeAddr,
 				TransferDetails: &TransferDetails{
@@ -529,7 +540,7 @@ func TestValidateLogMessagePublished(t *testing.T) {
 			},
 		},
 		"invalid: nil AmountRaw": {
-			input: LogMessagePublished{
+			logMessagePublished: LogMessagePublished{
 				EventEmitter: coreBridgeAddr,
 				MsgSender:    tokenBridgeAddr,
 				TransferDetails: &TransferDetails{
@@ -544,7 +555,7 @@ func TestValidateLogMessagePublished(t *testing.T) {
 			},
 		},
 		"invalid: negative AmountRaw": {
-			input: LogMessagePublished{
+			logMessagePublished: LogMessagePublished{
 				EventEmitter: coreBridgeAddr,
 				MsgSender:    tokenBridgeAddr,
 				TransferDetails: &TransferDetails{
@@ -559,7 +570,7 @@ func TestValidateLogMessagePublished(t *testing.T) {
 			},
 		},
 		"invalid: nil Amount": {
-			input: LogMessagePublished{
+			logMessagePublished: LogMessagePublished{
 				EventEmitter: coreBridgeAddr,
 				MsgSender:    tokenBridgeAddr,
 				TransferDetails: &TransferDetails{
@@ -574,7 +585,7 @@ func TestValidateLogMessagePublished(t *testing.T) {
 			},
 		},
 		"invalid: negative Amount": {
-			input: LogMessagePublished{
+			logMessagePublished: LogMessagePublished{
 				EventEmitter: coreBridgeAddr,
 				MsgSender:    tokenBridgeAddr,
 				TransferDetails: &TransferDetails{
@@ -596,7 +607,7 @@ func TestValidateLogMessagePublished(t *testing.T) {
 			t.Parallel() // marks each test case as capable of running in parallel with each other
 			t.Log(name)
 
-			err := validate[*LogMessagePublished](&test.input)
+			err := validate[*LogMessagePublished](&test.logMessagePublished)
 			require.Error(t, err)
 			_, ok := err.(*InvalidLogError)
 			assert.True(t, ok, "wrong error type: ", err.Error())
@@ -713,6 +724,7 @@ func TestVAAFromAddr(t *testing.T) {
 	}
 
 }
+
 func TestDepositFrom(t *testing.T) {
 
 	t.Parallel()
