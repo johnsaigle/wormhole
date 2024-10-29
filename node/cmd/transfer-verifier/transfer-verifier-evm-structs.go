@@ -809,7 +809,7 @@ func validate[L TransferLog](tLog TransferLog) error {
 		// at this point, this should've been updated
 
 		if cmp(log.Emitter(), log.TokenAddress) != 0 {
-			return &InvalidLogError{Msg: "deposit emitter is not equal to its token address"}
+			return &InvalidLogError{Msg: "transfer emitter is not equal to its token address"}
 		}
 		if cmp(log.OriginAddress(), ZERO_ADDRESS_VAA) == 0 {
 			return &InvalidLogError{Msg: "originAddress is the zero address"}
