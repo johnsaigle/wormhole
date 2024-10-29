@@ -395,6 +395,14 @@ type LogMessagePublished struct {
 	// Note: these fields are non-exhaustive. Data not needed for Transfer Verification is not encoded here.
 }
 
+func (l *LogMessagePublished) String() string {
+	return fmt.Sprintf("LogMessagePublished: {emitter=%s sender=%s transferDetails=%s}",
+		l.EventEmitter,
+		l.MsgSender,
+		l.TransferDetails,
+	)
+}
+
 func (l *LogMessagePublished) Destination() (destination vaa.Address) {
 	if l.TransferDetails != nil {
 		destination = l.TransferDetails.TargetAddress
@@ -445,18 +453,30 @@ type TransferReceipt struct {
 
 func (r *TransferReceipt) String() string {
 	dStr := ""
-	for _, d := range *r.Deposits {
-		dStr += d.String()
+	if r.Deposits != nil {
+		for _, d := range *r.Deposits {
+			if d != nil {
+				dStr += d.String()
+			}
+		}
 	}
 
 	tStr := ""
-	for _, t := range *r.Transfers {
-		tStr += t.String()
+	if r.Transfers != nil {
+		for _, t := range *r.Transfers {
+			if t != nil {
+				tStr += t.String()
+			}
+		}
 	}
 
 	mStr := ""
-	for _, m := range *r.Transfers {
-		mStr += m.String()
+	if r.MessagePublicatons != nil {
+		for _, m := range *r.MessagePublicatons {
+			if m != nil {
+				mStr += m.String()
+			}
+		}
 	}
 
 	return fmt.Sprintf(
@@ -539,9 +559,9 @@ type TransferDetails struct {
 
 func (td *TransferDetails) String() string {
 	return fmt.Sprintf(
-		"PayloadType: %d OriginAddressRaw: %s TokenChain: %d OriginAddress: %s TargetAddress: %s AmountRaw: %s Amount: %s",
+		"PayloadType: %d OriginAddressRaw(hex-encoded): %s TokenChain: %d OriginAddress: %s TargetAddress: %s AmountRaw: %s Amount: %s",
 		td.PayloadType,
-		td.OriginAddressRaw,
+		fmt.Sprintf("%x", td.OriginAddressRaw),
 		td.TokenChain,
 		td.OriginAddress.String(),
 		td.TargetAddress.String(),
