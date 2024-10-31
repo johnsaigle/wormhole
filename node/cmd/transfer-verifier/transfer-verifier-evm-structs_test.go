@@ -790,11 +790,33 @@ func TestParseERC20TransferFrom(t *testing.T) {
 				Data:   common.LeftPadBytes(big.NewInt(100).Bytes(), EVM_WORD_LENGTH),
 			},
 			expected: &ERC20Transfer{
-				From:         eoaAddrGeth,
-				To:           tokenBridgeAddr,
 				TokenAddress: usdcAddr,
 				// Default token chain for a transfer.
 				TokenChain: NATIVE_CHAIN_ID,
+				From:         eoaAddrGeth,
+				To:           tokenBridgeAddr,
+				Amount:     big.NewInt(100),
+			},
+		},
+		"valid transfer: burn action": {
+			log: types.Log{
+				Address: usdcAddr,
+				Topics: []common.Hash{
+					common.HexToHash(EVENTHASH_ERC20_TRANSFER),
+					// From
+					common.HexToHash(eoaAddrGeth.String()),
+					// To is equal to the zero-address for burn transfers
+					common.HexToHash(ZERO_ADDRESS.String()),
+				},
+				TxHash: common.BytesToHash([]byte{0x01}),
+				Data:   common.LeftPadBytes(big.NewInt(100).Bytes(), EVM_WORD_LENGTH),
+			},
+			expected: &ERC20Transfer{
+				TokenAddress: usdcAddr,
+				// Default token chain for a transfer.
+				TokenChain: NATIVE_CHAIN_ID,
+				From:         eoaAddrGeth,
+				To:           ZERO_ADDRESS,
 				Amount:     big.NewInt(100),
 			},
 		},
@@ -811,5 +833,37 @@ func TestParseERC20TransferFrom(t *testing.T) {
 			require.NoError(t, err)
 		})
 	}
+
+	invalidTests := map[string]struct {
+		log      types.Log
+	}{
+		"invalid transfer: From is zero address": {
+			log: types.Log{
+				Address: usdcAddr,
+				Topics: []common.Hash{
+					common.HexToHash(EVENTHASH_ERC20_TRANSFER),
+					// From
+					common.HexToHash(ZERO_ADDRESS.String()),
+					// To
+					common.HexToHash(tokenBridgeAddr.String()),
+				},
+				TxHash: common.BytesToHash([]byte{0x01}),
+				Data:   common.LeftPadBytes(big.NewInt(100).Bytes(), EVM_WORD_LENGTH),
+			},
+		},
+	}
+
+	for name, invalidTest := range invalidTests {
+		test := invalidTest // NOTE: uncomment for Go < 1.22, see /doc/faq#closures_and_goroutines
+		t.Run(name, func(t *testing.T) {
+			t.Parallel() // marks each test case as capable of running in parallel with each other
+			t.Log(name)
+
+			transfer, err := ERC20TransferFrom(&test.log)
+			require.Error(t, err)
+			assert.Nil(t, transfer)
+		})
+	}
+
 
 }
