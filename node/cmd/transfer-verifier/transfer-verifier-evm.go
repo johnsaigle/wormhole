@@ -222,8 +222,8 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 			}
 
 			// Get the full transaction receipt for this log.
-			receipt, err := transferVerifier.ethConnector.TransactionReceipt(ctx, vLog.Raw.TxHash)
-			if err != nil {
+			receipt, connectorErr := transferVerifier.ethConnector.TransactionReceipt(ctx, vLog.Raw.TxHash)
+			if connectorErr != nil {
 				transferVerifier.logger.Warn("could not find core bridge receipt", zap.Error(err))
 				continue
 			}
@@ -233,8 +233,8 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 			processedTransactions[vLog.Raw.TxHash] = receipt
 
 			// Parse raw transaction receipt into high-level struct containing transfer details.
-			transferReceipt, err := transferVerifier.ParseReceipt(receipt)
-			if err != nil || transferReceipt == nil {
+			transferReceipt, parseErr := transferVerifier.ParseReceipt(receipt)
+			if parseErr != nil || transferReceipt == nil {
 				transferVerifier.logger.Warn("error when parsing receipt. skipping validation",
 					zap.String("receipt hash", receipt.TxHash.String()),
 					zap.Error(err))
@@ -246,9 +246,9 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 			// such as a token's native address and its decimals.
 			updateErr := transferVerifier.UpdateReceiptDetails(transferReceipt)
 			if updateErr != nil {
-				transferVerifier.logger.Warn("error when parsing receipt. can't continue processing",
+				transferVerifier.logger.Warn("error when fetching receipt details from the token bridge. can't continue processing",
 					zap.String("receipt hash", receipt.TxHash.String()),
-					zap.Error(err))
+					zap.Error(updateErr))
 				continue
 			}
 
@@ -258,7 +258,7 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 
 			if processErr != nil {
 				transferVerifier.logger.Error("error when processing receipt. can't continue processing",
-					zap.Error(err),
+					zap.Error(processErr),
 					zap.String("txHash", vLog.Raw.TxHash.String()))
 				continue
 			}
@@ -308,7 +308,7 @@ func (tv *TransferVerifier[ethClient, Connector]) UpdateReceiptDetails(
 			// therefore there is no way to compare the amount transferred or burned with
 			// the LogMessagePublished payload. In this case, we can't process this receipt.
 
-			return errors.New("error when fetching native info for ERC20 Transfer. Can't continue to process this receipt")
+			return errors.Join(errors.New("error when fetching native info for ERC20 Transfer. Can't continue to process this receipt"), fetchErr)
 		}
 
 		// Update ChainID if this is a wrapped asset
@@ -328,11 +328,11 @@ func (tv *TransferVerifier[ethClient, Connector]) UpdateReceiptDetails(
 	// recorded in LogMessagePublished events for this receipt.
 	tv.logger.Debug("populating native data for LogMessagePublished assets")
 	for _, message := range *receipt.MessagePublicatons {
-		newDetails, fetchErr := tv.fetchLogMessageDetails(message.TransferDetails)
-		if fetchErr != nil {
+		newDetails, logFetchErr := tv.fetchLogMessageDetails(message.TransferDetails)
+		if logFetchErr != nil {
 			// The unwrapped address and the denormalized amount are necessary for checking
 			// that the amount matches.
-			return errors.New("error when populating wormhole details. cannot verify receipt!")
+			return errors.Join(errors.New("error when populating wormhole details. cannot verify receipt!"), logFetchErr)
 		}
 		message.TransferDetails = newDetails
 	}
@@ -354,9 +354,9 @@ func (tv *TransferVerifier[ethClient, Connector]) fetchNativeInfo(
 ) (nativeChain vaa.ChainID, nativeAddr common.Address, err error) {
 	tv.logger.Debug("checking if ERC20 asset is wrapped")
 
-	wrapped, err := tv.isWrappedAsset(tokenAddr)
-	if err != nil {
-		return 0, ZERO_ADDRESS, errors.Join(errors.New("could not check if asset was wrapped"), err)
+	wrapped, isWrappedErr := tv.isWrappedAsset(tokenAddr)
+	if isWrappedErr != nil {
+		return 0, ZERO_ADDRESS, errors.Join(errors.New("could not check if asset was wrapped"), isWrappedErr)
 	}
 
 	if !wrapped {
@@ -365,9 +365,9 @@ func (tv *TransferVerifier[ethClient, Connector]) fetchNativeInfo(
 	}
 
 	// Unwrap the asset
-	unwrapped, err := tv.unwrapIfWrapped(tokenAddr.Bytes(), tokenChain)
-	if err != nil {
-		return 0, ZERO_ADDRESS, errors.Join(errors.New("error when unwrapping asset"), err)
+	unwrapped, unwrapErr := tv.unwrapIfWrapped(tokenAddr.Bytes(), tokenChain)
+	if unwrapErr != nil {
+		return 0, ZERO_ADDRESS, errors.Join(errors.New("error when unwrapping asset"), unwrapErr)
 	}
 
 	// Asset is wrapped but not in wrappedAsset map for the Token Bridge.
@@ -376,10 +376,11 @@ func (tv *TransferVerifier[ethClient, Connector]) fetchNativeInfo(
 	}
 
 	// Get the native chain ID
-	nativeChain, err = tv.chainId(unwrapped)
-	if err != nil {
-		return 0, ZERO_ADDRESS, errors.Join(errors.New("error when fetching chain ID"), err)
+	nativeChain, chainIdErr := tv.chainId(unwrapped)
+	if chainIdErr != nil {
+		return 0, ZERO_ADDRESS, errors.Join(errors.New("error when fetching chain ID"), chainIdErr)
 	}
+
 	return nativeChain, nativeAddr, nil
 }
 
@@ -451,7 +452,6 @@ func (tv *TransferVerifier[evmClient, connector]) ParseReceipt(
 				continue
 			}
 
-
 			logMessagePublished, parseLogErr := tv.ethConnector.ParseLogMessagePublished(*log)
 			if parseLogErr != nil {
 				tv.logger.Error("failed to parse LogMessagePublished event")
@@ -490,10 +490,6 @@ func (tv *TransferVerifier[evmClient, connector]) ParseReceipt(
 			// Validation is complete. Now, parse the raw bytes of the payload into a TransferDetails instance.
 			transferDetails, parsePayloadErr := parseLogMessagePublishedPayload(logMessagePublished.Payload)
 			if parsePayloadErr != nil {
-				tv.logger.Error(
-					"issue parsing receipt payload",
-					zap.Error(parsePayloadErr),
-					zap.String("txhash", log.TxHash.String()))
 				receiptErr = errors.Join(receiptErr, parsePayloadErr)
 				continue
 			}
@@ -509,7 +505,7 @@ func (tv *TransferVerifier[evmClient, connector]) ParseReceipt(
 	}
 
 	if len(messagePublications) == 0 {
-		receiptErr = errors.Join(receiptErr, errors.New("parsed receipts but received no LogMessagePublished events")) 
+		receiptErr = errors.Join(receiptErr, errors.New("parsed receipts but received no LogMessagePublished events"))
 	}
 
 	if receiptErr != nil {
