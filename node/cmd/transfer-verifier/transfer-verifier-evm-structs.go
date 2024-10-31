@@ -616,6 +616,14 @@ func (tv *TransferVerifier[ethClient, connector]) unwrapIfWrapped(
 	tv.logger.Debug("got wrappedAsset result",
 		zap.String("tokenAddressNative", fmt.Sprintf("%x", tokenAddressNative)))
 
+	if cmp(tokenAddressNative, ZERO_ADDRESS) == 0 {
+		tv.logger.Info("got zero address for wrappedAsset result. this asset is probably not registered correctly",
+			zap.String("queried tokenAddress", fmt.Sprintf("%x", tokenAddress)),
+			zap.Uint16("queried tokenChain", uint16(tokenChain)),
+			zap.String("tokenChain name", tokenChain.String()),
+		)
+	}
+
 	return tokenAddressNative, nil
 }
 
