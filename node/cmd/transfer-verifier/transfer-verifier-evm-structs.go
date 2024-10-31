@@ -340,14 +340,11 @@ func (t *ERC20Transfer) String() string {
 func ERC20TransferFrom(log *types.Log) (transfer *ERC20Transfer, err error) {
 	from, to, amount := parseERC20TransferEvent(log.Topics, log.Data)
 
-	emptyAddr := common.Address{}
-
-	if cmp(from, emptyAddr) == 0 {
+	// Ensure From address is not empty. The To address is allowed to be empty when funds are being burned.
+	if cmp(from, ZERO_ADDRESS) == 0 {
 		return transfer, errors.New("could not parse ERC20 Transfer from log: address From is empty")
 	}
-	if cmp(to, emptyAddr) == 0 {
-		return transfer, errors.New("could not parse ERC20 Transfer from log: address To is empty")
-	}
+
 	if amount == nil {
 		return transfer, errors.New("could not parse ERC20 Transfer from log: nil Amount")
 	}
