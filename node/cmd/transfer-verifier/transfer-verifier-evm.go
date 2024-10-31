@@ -103,8 +103,8 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 	}
 
 	// Setup logging
-	lvl, err := ipfslog.LevelFromString(*logLevel)
-	if err != nil {
+	lvl, logErr := ipfslog.LevelFromString(*logLevel)
+	if logErr != nil {
 		fmt.Println("Invalid log level")
 		os.Exit(1)
 	}
@@ -136,10 +136,10 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 	defer ctxCancel()
 
 	var ethConnector connectors.Connector
-	ethConnector, err = connectors.NewEthereumBaseConnector(ctx, "eth", *evmRpc, common.HexToAddress(*evmCoreContract), logger)
-	if err != nil {
+	ethConnector, connectErr := connectors.NewEthereumBaseConnector(ctx, "eth", *evmRpc, common.HexToAddress(*evmCoreContract), logger)
+	if connectErr != nil {
 		logger.Fatal("could not create new ethereum base connector",
-			zap.Error(err))
+			zap.Error(connectErr))
 	}
 
 	// Create main configuration for Transfer Verification
@@ -176,8 +176,8 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 	// - process parsed receipts to make sure they are valid
 	for {
 		select {
-		case err := <-sub.Errors():
-			transferVerifier.logger.Warn("error on subscription", zap.Error(err))
+		case subErr := <-sub.Errors():
+			transferVerifier.logger.Warn("error on subscription", zap.Error(subErr))
 
 		// Do cleanup and statistics reporting.
 		case <-ticker.C:
@@ -222,9 +222,9 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 			}
 
 			// Get the full transaction receipt for this log.
-			receipt, connectorErr := transferVerifier.ethConnector.TransactionReceipt(ctx, vLog.Raw.TxHash)
-			if connectorErr != nil {
-				transferVerifier.logger.Warn("could not find core bridge receipt", zap.Error(err))
+			receipt, txReceiptErr := transferVerifier.ethConnector.TransactionReceipt(ctx, vLog.Raw.TxHash)
+			if txReceiptErr != nil {
+				transferVerifier.logger.Warn("could not find core bridge receipt", zap.Error(txReceiptErr))
 				continue
 			}
 
@@ -237,7 +237,7 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 			if parseErr != nil || transferReceipt == nil {
 				transferVerifier.logger.Warn("error when parsing receipt. skipping validation",
 					zap.String("receipt hash", receipt.TxHash.String()),
-					zap.Error(err))
+					zap.Error(parseErr))
 				continue
 			}
 
