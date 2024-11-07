@@ -257,6 +257,11 @@ func runTransferVerifierEvm(cmd *cobra.Command, args []string) {
 			logger.Debug("finished processing receipt", zap.String("summary", summary.String()))
 
 			if processErr != nil {
+				// This represents a serious error. Normal, valid transactions should return an
+				// error here.
+				// TODO: Perhaps this part of the code could be extended to send this error along a 
+				// dedicated channel. That way it could be monitored by another process which could
+				// block the publication of the message that is encoded in this receipt.
 				transferVerifier.logger.Error("error when processing receipt. can't continue processing",
 					zap.Error(processErr),
 					zap.String("txHash", vLog.Raw.TxHash.String()))
@@ -534,6 +539,13 @@ func (i InvariantError) Error() string {
 // transfer in the token bridge. This is determined by iterating through the
 // logs of the receipt and ensuring that the sum transferred into the token
 // bridge does not exceed the sum emitted by the core bridge.
+// If this function returns an error, that means there is some serious trouble.
+// An error should be returned if a deposit or transfer in the receipt is missing
+// crucial information, or else if the sum of the funds in are less than
+// the funds out.
+// 
+// When modifying this code, be cautious not to return errors unless something
+// is really wrong.
 func (tv *TransferVerifier[evmClient, connector]) ProcessReceipt(
 	receipt *TransferReceipt,
 ) (summary *ReceiptSummary, err error) {
@@ -546,12 +558,14 @@ func (tv *TransferVerifier[evmClient, connector]) ProcessReceipt(
 
 	// Sanity checks.
 	if receipt == nil {
-		tv.logger.Warn("transfer receipt is nil. Cannot perform transfer verification")
 		return summary, errors.New("got nil transfer receipt")
 	}
 	if len(*receipt.MessagePublicatons) == 0 {
-		tv.logger.Warn("transfer receipt contained no LogMessagePublished events. Cannot perform transfer verification")
 		return summary, errors.New("no message publications in receipt")
+	}
+
+	if len(*receipt.Deposits) == 0 && len(*receipt.Transfers) == 0 {
+		return summary, errors.New("invalid receipt: no deposits and no transfers")
 	}
 
 	// Process NativeDeposits
