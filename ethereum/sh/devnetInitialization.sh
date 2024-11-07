@@ -82,3 +82,7 @@ echo "Registering chains on nft bridge"
 echo "NFT_BRIDGE_REGISTRATION_VAAS: $NFT_BRIDGE_REGISTRATION_VAAS"
 source "./sh/registerChainsNFTBridge.sh"
 echo "Done registering chains on nft bridge"
+
+echo "Running the PublishMessage script to test the transfer verifier"
+forge script ./forge-scripts/PublishMessage.s.sol:PublishMessage --rpc-url $RPC_URL --private-key $MNEMONIC --broadcast
+echo "Done running PublishMessage script"

@@ -63,10 +63,10 @@ contract PublishMessage is Script {
     // this function makes two token bridge transfer requests in separate
     // transactions
     function multipleTransfersSeparateTransactions() internal {
-        fundAccountWithTokens(user1);
+        fundAccountWithTokens(user0);
 
         // transfer 100 testToken
-        vm.startBroadcast(user1);
+        vm.startBroadcast(user0);
         testTokenA.approve(address(tokenBridge), type(uint256).max);
         tokenBridge.transferTokens(
             address(testTokenA),          // token 
@@ -97,7 +97,7 @@ contract PublishMessage is Script {
     //  a "skip: transaction hash already processed" message, indicating that the 2nd
     //      LogMessagePublished is ignored.
     function multipleTransfersInSingleTx() internal {
-        vm.startBroadcast(user1);
+        vm.startBroadcast(user0);
         MultiCall mc = new MultiCall();
         vm.stopBroadcast();
 
@@ -138,7 +138,7 @@ contract PublishMessage is Script {
         // fund multicall and launch the request
         fundAccountWithTokens(address(mc));
 
-        vm.broadcast(user1);
+        vm.broadcast(user0);
         mc.multiCall(targets, calldatas);
 
     }
@@ -163,12 +163,17 @@ contract PublishMessage is Script {
     }
 
     function publishArbitraryTransfer(uint8 payloadID, uint256 amount, bytes32 tokenAddress, uint16 tokenChain) internal {
-        vm.startBroadcast(address(tokenBridge));
         // Store original code
         bytes memory originalCode = address(tokenBridge).code;
-        // Temporarily make tokenBridge into an EOA by removing its code
-        vm.etch(address(tokenBridge), "");
-        
+
+        // Overwrite token bridge with the mocked contract data. This way we
+        // avoid the need to impersonate the token bridge directly which
+        // can be difficult to do when the transaction needs to be broadcasted
+        // while impersonating a contract.
+        bytes memory newCode = type(MockTokenBridge).creationCode;
+        vm.etch(address(tokenBridge), newCode);
+
+        vm.broadcast(address(user1));
         if (payloadID == 0x01) {
             ITokenBridge.Transfer memory transfer;
 
@@ -179,7 +184,16 @@ contract PublishMessage is Script {
 
             bytes memory payload = encodeTransfer(transfer);
 
-            wormhole.publishMessage(0x01, payload, 0x01);
+            // None of the arguments are used except for payload
+            tokenBridge.transferTokensWithPayload(
+                address(0),
+                0,
+                0,
+                addrToBytes32(address(0)),
+                0,
+                payload
+            );
+            // wormhole.publishMessage(0x01, payload, 0x01);
         } else if (payloadID == 0x03) {
             ITokenBridge.TransferWithPayload memory transfer;
             
@@ -190,11 +204,21 @@ contract PublishMessage is Script {
 
             bytes memory payload = encodeTransferWithPayload(transfer);
 
-            wormhole.publishMessage(0x01, payload, 0x01);
+            // tokenBridge.publishMessage(0x01, payload, 0x01);
+            // wormhole.publishMessage(0x01, payload, 0x01);
+            // None of the arguments are used except for payload
+            tokenBridge.transferTokensWithPayload(
+                address(0),
+                0,
+                0,
+                addrToBytes32(address(0)),
+                0,
+                payload
+            );
         }
+
         // Restore the original contract code
         vm.etch(address(tokenBridge), originalCode);
-        vm.stopBroadcast();
     }
 
     // https://github.com/wormhole-foundation/wormhole/blob/6b810acbecf67e1bb8a663db97dc352e13589529/ethereum/contracts/bridge/Bridge.sol#L606
@@ -227,4 +251,24 @@ contract PublishMessage is Script {
     function addrToBytes32(address a) internal pure returns (bytes32) {
         return bytes32(uint256(uint160(a)));
     } 
+
+}
+
+contract MockTokenBridge {
+    
+    // params other than payload are not used.
+    function transferTokensWithPayload(
+        address _token, 
+        uint256 _amount, 
+        uint16 _recipientChain,
+        address _recipientAddress, 
+        uint8 _nonce, 
+        bytes memory payload
+    ) public payable returns (uint64 sequence) {
+
+        IWormhole wormhole = IWormhole(0xC89Ce4735882C9F0f0FE26686c53074E09B0D550);
+        // arguments: nonce, payload, consistencyLevel
+        sequence = wormhole.publishMessage(uint32(0x01), payload, uint8(0x01));
+        return sequence;
+    }
 }
