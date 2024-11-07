@@ -82,3 +82,10 @@ echo "Registering chains on nft bridge"
 echo "NFT_BRIDGE_REGISTRATION_VAAS: $NFT_BRIDGE_REGISTRATION_VAAS"
 source "./sh/registerChainsNFTBridge.sh"
 echo "Done registering chains on nft bridge"
+
+# TODO this could potentially be done elsewhere. It's a specific test, not related to setting up devnet.
+# Wherever it goes though, it will depend on the output of this script
+echo "Testing transfer verifier"
+# TODO should this be source? I think no, but consider it
+bash sh/transfer-verifier-test.sh
+echo "Done testing transfer verifier"

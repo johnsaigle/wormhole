@@ -14,6 +14,7 @@ RUN apt-get -y install jq
 
 COPY --from=foundry /usr/local/bin/anvil /bin/anvil
 COPY --from=foundry /usr/local/bin/forge /bin/forge
+COPY --from=foundry /usr/local/bin/cast /bin/cast
 
 # Run as user, otherwise, npx explodes.
 USER 1000

@@ -12,7 +12,7 @@ TOKEN_BRIDGE_CONTRACT=0x0290FB167208Af455bB137780163b7B7a9a10C16
 
 # export ETH_FROM="0x3ee18B2214AFF97000D974cf647E7C347E8fa585"
 # TODO these can be a CLI params from the sh/devnet script
-export MNEMONIC="myth like bonus scare over problem client lizard pioneer submit female collect" # wormhole test account
+MNEMONIC=0x4f3edf983ac636a65a842ce7c78d9aa706d3b113bce9c46f30d7d21715b23b1d
 
 # TODO change to one of the deployed test tokens. Maybe a CLI param
 ERC20_ADDR="0x47bdB2D7d6528C760b6f228b3B8F9F650169a10f" # Test token A
@@ -23,7 +23,7 @@ TRANSFER_AMOUNT="10"
 # USDC_WHALE="0x40ec5B33f54e0E8A33A975908C5BA1c14e5BbbDf" # Polygon's ERC20 Bridge contract address on Ethereum Mainnet, used as a whale account
 
 ANVIL_USER0="0x90F8bf6A479f320ead074411a4B0e7944Ea8c9C1" # Account0 reported by anvil when run using $MNEMONIC
-ANVIL_USER1="0xFFcf8FDEE72ac11b5c542428B35EEF5769C409f0;" 
+ANVIL_USER1="0xFFcf8FDEE72ac11b5c542428B35EEF5769C409f0" 
 # TODO this may not be necessary when funding these accounts with vm.deal
 ETH_WHALE="${ANVIL_USER0}" # this account should have a bunch of Eth (?)
 FROM="${ETH_WHALE}"
@@ -59,7 +59,7 @@ done
 # cast call $TOKEN_BRIDGE_CONTRACT "chainId" &> /dev/null || (echo "Liveness check for token bridge failed. Is anvil running? Did you fork mainnet?" && exit 1)
 
 echo "DEBUG:"
-echo "- CORE_CONTRACT=${CORE_CONTRACT}"
+echo "- CORE_BRIDGE_CONTRACT=${CORE_BRIDGE_CONTRACT}"
 echo "- TOKEN_BRIDGE_CONTRACT=${TOKEN_BRIDGE_CONTRACT}"
 echo "- MNEMONIC=${MNEMONIC}"
 echo "- FROM=${FROM}"
@@ -71,14 +71,16 @@ echo
 
 # === Call wrapAndTransferETH()
 echo "Calling wrapAndTransferETH() as ${FROM}"
+NONCE=100
 cast send --unlocked \
    --json \
+   --unlocked \
    --from "${FROM}" \
    --value "$VALUE" \
-   --mnemonic-passphrase "$MNEMONIC" \
+   --private-key "$MNEMONIC" \
    "$TOKEN_BRIDGE_CONTRACT" \
    "wrapAndTransferETH(uint16,bytes32,uint256,uint32)" \
-   1 "$RECIPIENT" 1 1 
+   1 "$RECIPIENT" 1 "${NONCE}"
 echo ""
 #
 # === Call wrapAndTransferETHWithPayload()
@@ -87,19 +89,19 @@ cast send --unlocked \
    --json \
    --from "${FROM}" \
    --value "$VALUE" \
-   --mnemonic-passphrase "$MNEMONIC" \
-   "$TOKEN_BRIDGE_CONTRACT" \
+   --private-key "$MNEMONIC" \
+   "${TOKEN_BRIDGE_CONTRACT}" \
    "wrapAndTransferETHWithPayload(uint16,bytes32,uint32,bytes)" \
    1 "${RECIPIENT}" 1 "${PAYLOAD}"
 echo ""
 
-# USDC.approve() so that the token bridge can move funds
-echo "Calling USDC.approve() (to prep transferTokens endpoints) as ${FROM}"
+# approve() so that the token bridge can move funds
+echo "Calling approve() (to prep transferTokens endpoints) as ${FROM}"
 cast send --unlocked \
    --json \
    --from "$FROM" \
    --value "0" \
-   --mnemonic-passphrase "$MNEMONIC" \
+   --private-key "$MNEMONIC" \
    "$ERC20_ADDR" \
    "approve(address, uint256)" \
    "$TOKEN_BRIDGE_CONTRACT" $((1000 * $TRANSFER_AMOUNT))
@@ -114,8 +116,8 @@ cast send --unlocked \
    --json \
    --from "$FROM" \
    --value "0" \
-   --mnemonic-passphrase "$MNEMONIC" \
-   "$TOKEN_BRIDGE_CONTRACT" \
+   --private-key "$MNEMONIC" \
+   "${TOKEN_BRIDGE_CONTRACT}" \
    "transferTokens(address,uint256,uint16,bytes32,uint256,uint32)" \
    "${ERC20_ADDR}" "${TRANSFER_AMOUNT}" 1 "${RECIPIENT}" 1 ${NONCE}
 echo ""
@@ -127,10 +129,10 @@ echo ""
 echo "Calling transferTokensWithPayload() as ${FROM}"
 cast send --unlocked \
    --json \
-   --from "$FROM" \
+   --from "${FROM}" \
    --value "0" \
-   --mnemonic-passphrase "$MNEMONIC" \
-   "$TOKEN_BRIDGE_CONTRACT" \
+   --private-key "$MNEMONIC" \
+   "${TOKEN_BRIDGE_CONTRACT}" \
    "transferTokensWithPayload(address,uint256,uint16,bytes32,uint32,bytes)" \
    "${ERC20_ADDR}" "${TRANSFER_AMOUNT}" 1 "${RECIPIENT}" "${NONCE}" "${PAYLOAD}"
 echo ""
@@ -142,13 +144,13 @@ echo ""
 # being present in the same receipt.
 # This is done by impersonating the token bridge contract and sending a message directly to the core bridge.
 # Ensure that anvil is using `--auto-impersonate` or else that account impersonation is enabled in your local environment.
-echo "Calling publishMessage as ${FROM}" 
+echo "Calling publishMessage as ${TOKEN_BRIDGE_CONTRACT}" 
 cast send --unlocked \
    --json \
    --from "${TOKEN_BRIDGE_CONTRACT}" \
    --value "0" \
-   --mnemonic-passphrase "$MNEMONIC" \
-   "$CORE_CONTRACT" \
+   --private-key "$MNEMONIC" \
+   "${CORE_BRIDGE_CONTRACT}" \
    "publishMessage(uint32,bytes,uint8)" \
    0 "${PAYLOAD}" 1
 echo ""
