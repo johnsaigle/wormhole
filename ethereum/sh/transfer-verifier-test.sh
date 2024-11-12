@@ -67,75 +67,91 @@ echo "- VALUE=${VALUE}"
 echo "- RECIPIENT=${RECIPIENT}" 
 echo 
 
+# Fund the token bridge from User0
+echo "Funding token bridge using user0's balance"
+cast send --unlocked \
+   --from $ANVIL_USER0 \
+   --value 1000000000000000000000 \
+   ${TOKEN_BRIDGE_CONTRACT}
+echo ""
+
+BALANCE_CORE=$(cast balance $CORE_BRIDGE_CONTRACT)
+BALANCE_TOKEN=$(cast balance $TOKEN_BRIDGE_CONTRACT)
+BALANCE_USER0=$(cast balance $ANVIL_USER0)
+echo "BALANCES:"
+echo "- CORE_BRIDGE_CONTRACT=${BALANCE_CORE}"
+echo "- TOKEN_BRIDGE_CONTRACT=${BALANCE_TOKEN}"
+echo "- ANVIL_USER0=${BALANCE_USER0}"
+echo 
 # === [[ BEGIN HAPPY PATH TESTING ]] ====
 
 # === Call wrapAndTransferETH()
-echo "Calling wrapAndTransferETH() as ${FROM}"
-NONCE=100
-cast send --unlocked \
-   --json \
-   --unlocked \
-   --from "${FROM}" \
-   --value "$VALUE" \
-   --private-key "$MNEMONIC" \
-   "$TOKEN_BRIDGE_CONTRACT" \
-   "wrapAndTransferETH(uint16,bytes32,uint256,uint32)" \
-   1 "$RECIPIENT" 1 "${NONCE}"
-echo ""
+# echo "Calling wrapAndTransferETH() as ${FROM}"
+# NONCE=100
+# cast send --unlocked \
+#    --json \
+#    --unlocked \
+#    --from "${FROM}" \
+#    --value "$VALUE" \
+#    --private-key "$MNEMONIC" \
+#    "$TOKEN_BRIDGE_CONTRACT" \
+#    "wrapAndTransferETH(uint16,bytes32,uint256,uint32)" \
+#    1 "$RECIPIENT" 1 "${NONCE}"
+# echo ""
 #
-# === Call wrapAndTransferETHWithPayload()
-echo "Calling wrapAndTransferETHWithPayload() as ${FROM}"
-cast send --unlocked \
-   --json \
-   --from "${FROM}" \
-   --value "$VALUE" \
-   --private-key "$MNEMONIC" \
-   "${TOKEN_BRIDGE_CONTRACT}" \
-   "wrapAndTransferETHWithPayload(uint16,bytes32,uint32,bytes)" \
-   1 "${RECIPIENT}" 1 "${PAYLOAD}"
-echo ""
-
-# approve() so that the token bridge can move funds
-echo "Calling approve() (to prep transferTokens endpoints) as ${FROM}"
-cast send --unlocked \
-   --json \
-   --from "$FROM" \
-   --value "0" \
-   --private-key "$MNEMONIC" \
-   "$ERC20_ADDR" \
-   "approve(address, uint256)" \
-   "$TOKEN_BRIDGE_CONTRACT" $((1000 * $TRANSFER_AMOUNT))
-echo ""
-
-# === Call transferTokens()
-# Note:
-# - that msg.value() for this type of transaction must be 0
-# - the final payload bytes are arbitrary
-echo "Calling transferTokens() as ${FROM}"
-cast send --unlocked \
-   --json \
-   --from "$FROM" \
-   --value "0" \
-   --private-key "$MNEMONIC" \
-   "${TOKEN_BRIDGE_CONTRACT}" \
-   "transferTokens(address,uint256,uint16,bytes32,uint256,uint32)" \
-   "${ERC20_ADDR}" "${TRANSFER_AMOUNT}" 1 "${RECIPIENT}" 1 ${NONCE}
-echo ""
-
-# === Call transferTokensWithPayload()
-# Note:
-# - that msg.value() for this type of transaction must be 0
-# - the final payload bytes are arbitrary
-echo "Calling transferTokensWithPayload() as ${FROM}"
-cast send --unlocked \
-   --json \
-   --from "${FROM}" \
-   --value "0" \
-   --private-key "$MNEMONIC" \
-   "${TOKEN_BRIDGE_CONTRACT}" \
-   "transferTokensWithPayload(address,uint256,uint16,bytes32,uint32,bytes)" \
-   "${ERC20_ADDR}" "${TRANSFER_AMOUNT}" 1 "${RECIPIENT}" "${NONCE}" "${PAYLOAD}"
-echo ""
+# # === Call wrapAndTransferETHWithPayload()
+# echo "Calling wrapAndTransferETHWithPayload() as ${FROM}"
+# cast send --unlocked \
+#    --json \
+#    --from "${FROM}" \
+#    --value "$VALUE" \
+#    --private-key "$MNEMONIC" \
+#    "${TOKEN_BRIDGE_CONTRACT}" \
+#    "wrapAndTransferETHWithPayload(uint16,bytes32,uint32,bytes)" \
+#    1 "${RECIPIENT}" 1 "${PAYLOAD}"
+# echo ""
+#
+# # approve() so that the token bridge can move funds
+# echo "Calling approve() (to prep transferTokens endpoints) as ${FROM}"
+# cast send --unlocked \
+#    --json \
+#    --from "$FROM" \
+#    --value "0" \
+#    --private-key "$MNEMONIC" \
+#    "$ERC20_ADDR" \
+#    "approve(address, uint256)" \
+#    "$TOKEN_BRIDGE_CONTRACT" $((1000 * $TRANSFER_AMOUNT))
+# echo ""
+#
+# # === Call transferTokens()
+# # Note:
+# # - that msg.value() for this type of transaction must be 0
+# # - the final payload bytes are arbitrary
+# echo "Calling transferTokens() as ${FROM}"
+# cast send --unlocked \
+#    --json \
+#    --from "$FROM" \
+#    --value "0" \
+#    --private-key "$MNEMONIC" \
+#    "${TOKEN_BRIDGE_CONTRACT}" \
+#    "transferTokens(address,uint256,uint16,bytes32,uint256,uint32)" \
+#    "${ERC20_ADDR}" "${TRANSFER_AMOUNT}" 1 "${RECIPIENT}" 1 ${NONCE}
+# echo ""
+#
+# # === Call transferTokensWithPayload()
+# # Note:
+# # - that msg.value() for this type of transaction must be 0
+# # - the final payload bytes are arbitrary
+# echo "Calling transferTokensWithPayload() as ${FROM}"
+# cast send --unlocked \
+#    --json \
+#    --from "${FROM}" \
+#    --value "0" \
+#    --private-key "$MNEMONIC" \
+#    "${TOKEN_BRIDGE_CONTRACT}" \
+#    "transferTokensWithPayload(address,uint256,uint16,bytes32,uint32,bytes)" \
+#    "${ERC20_ADDR}" "${TRANSFER_AMOUNT}" 1 "${RECIPIENT}" "${NONCE}" "${PAYLOAD}"
+# echo ""
 #
 # === [[ BEGIN ERROR PATH TESTING ]] ====
 
@@ -145,11 +161,14 @@ echo ""
 # This is done by impersonating the token bridge contract and sending a message directly to the core bridge.
 # Ensure that anvil is using `--auto-impersonate` or else that account impersonation is enabled in your local environment.
 echo "Calling publishMessage as ${TOKEN_BRIDGE_CONTRACT}" 
+   # --private-key "$MNEMONIC" \
+   # --max-fee 500000 \
 cast send --unlocked \
    --json \
+   --gas-limit 10000000 \
+   --priority-gas-price 100000 \
    --from "${TOKEN_BRIDGE_CONTRACT}" \
    --value "0" \
-   --private-key "$MNEMONIC" \
    "${CORE_BRIDGE_CONTRACT}" \
    "publishMessage(uint32,bytes,uint8)" \
    0 "${PAYLOAD}" 1

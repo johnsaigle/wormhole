@@ -5,10 +5,12 @@
 
 set -xeuo pipefail
 
-# mainnet core contract
-CORE_CONTRACT="0x98f3c9e6E3fAce36bAAd05FE09d375Ef1464288B"
-# mainnet token bridge contract
-TOKEN_BRIDGE_CONTRACT="0x3ee18B2214AFF97000D974cf647E7C347E8fa585"
+# mainnet 
+# CORE_CONTRACT="0x98f3c9e6E3fAce36bAAd05FE09d375Ef1464288B"
+# TOKEN_BRIDGE_CONTRACT="0x3ee18B2214AFF97000D974cf647E7C347E8fa585"
+# devnet 
+CORE_CONTRACT="0xC89Ce4735882C9F0f0FE26686c53074E09B0D550"
+TOKEN_BRIDGE_CONTRACT="0x0290FB167208Af455bB137780163b7B7a9a10C16"
 
 # Needs to be websockets so that the eth connector can get notifications
 ETH_RPC_DEVNET="ws://localhost:8545" # from Tilt, via Anvil
