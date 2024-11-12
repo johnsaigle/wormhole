@@ -461,6 +461,21 @@ k8s_resource(
     trigger_mode = trigger_mode,
 )
 
+# transfer-verifier
+k8s_yaml_with_ns("devnet/tx-verifier.yaml")
+
+k8s_resource(
+    "tx-verifier",
+    # TODO probably gate this behind eth-devnet because it doesn't make sense to use it otherwise
+    resource_deps = ["guardian"],
+    port_forwards = [
+    #     port_forward(6061, container_port = 6060, name = "Debug/Status Server [:6061]", host = webHost),
+        port_forward(7075, name = "Transfer Verifier [:7075]", host = webHost),
+    ],
+    labels = ["guardian"],
+    trigger_mode = trigger_mode,
+)
+
 if solana or pythnet:
     # solana client cli (used for devnet setup)
 

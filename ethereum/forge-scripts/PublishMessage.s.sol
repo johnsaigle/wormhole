@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.4;
+pragma solidity ^0.8.0;
 
 import {Script, console} from "forge-std/Script.sol";
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
@@ -55,8 +55,8 @@ contract PublishMessage is Script {
         vm.deal(address(testTokenB), 1e18 ether);
         vm.deal(address(weth), 1e18 ether);
 
-        multipleTransfersSeparateTransactions();
-        multipleTransfersInSingleTx();
+        // multipleTransfersSeparateTransactions();
+        // multipleTransfersInSingleTx();
         directlyPublishMessageAsTokenBridge();
     }
 
@@ -163,17 +163,65 @@ contract PublishMessage is Script {
     }
 
     function publishArbitraryTransfer(uint8 payloadID, uint256 amount, bytes32 tokenAddress, uint16 tokenChain) internal {
-        // Store original code
-        bytes memory originalCode = address(tokenBridge).code;
+        // This user transfers to the Token Bridge proxy. This function overwrites the implementation
+        // contract with a mocked version that skips all of the normal transfer logic and only
+        // publishes a message to the core bridge.
+        vm.startBroadcast(user0);
 
         // Overwrite token bridge with the mocked contract data. This way we
         // avoid the need to impersonate the token bridge directly which
         // can be difficult to do when the transaction needs to be broadcasted
         // while impersonating a contract.
-        bytes memory newCode = type(MockTokenBridge).creationCode;
-        vm.etch(address(tokenBridge), newCode);
 
-        vm.broadcast(address(user1));
+        // Important: the actual token bridge contract is being modified here, not the proxy.
+        // bytes32(uint256(keccak256('eip1967.proxy.implementation')) - 1)
+        address implementationAddress = 0x59d3631c86BbE35EF041872d502F218A39FBa150;
+
+        bytes32 IMPLEMENTATION_SLOT = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
+        address currentImpl = address(uint160(uint256(vm.load(address(tokenBridge), IMPLEMENTATION_SLOT))));
+        console.log("Current implementation:", currentImpl);
+        console.log("Expected implementation:", implementationAddress);       
+
+        // Store original code
+        // bytes memory originalCode = implementationAddress.code;
+
+        // Deploy mock contract and get its code
+        MockTokenBridge mockBridge = new MockTokenBridge();
+        console.log("mock bridge address", address(mockBridge));
+        bytes memory mockCode = address(mockBridge).code;
+
+        // Store the mocked bridge as the implementation address within the token bridge proxy
+        // Update proxy and implementation with the mocked code
+        // vm.etch(implementationAddress, mockCode);
+        // vm.etch(address(tokenBridge), mockCode);
+        // bytes memory updatedProxyCode = address(tokenBridge).code;
+        // bytes memory updatedCode = implementationAddress.code;
+
+        vm.store(
+            address(tokenBridge), 
+            IMPLEMENTATION_SLOT,
+            bytes32(uint256(uint160(address(mockBridge))))
+        );
+
+        // Debugging/sanity checks
+        address newImpl = address(uint160(uint256(vm.load(address(tokenBridge), IMPLEMENTATION_SLOT))));
+        console.log("New implementation:", newImpl); // should match mocked token bridge
+        // console.log("Original token bridge contract code:");
+        // console.logBytes(originalCode);
+        // console.log("Mocked code");
+        // console.logBytes(mockCode);
+        // console.log("Updated token bridge proxy code:");
+        // console.logBytes(updatedProxyCode);
+        // console.log("Updated token bridge contract code:");
+        // console.logBytes(updatedCode);
+
+        // bool areEqual = keccak256(updatedCode) == keccak256(mockCode);
+        // console.log("Are bytecodes equal?", areEqual);
+
+        // bytes4 originalSelector = ITokenBridge.transferTokensWithPayload.selector;
+        // bytes4 mockSelector = MockTokenBridge.transferTokensWithPayload.selector;
+        // console.log("Selectors match:", originalSelector == mockSelector);
+
         if (payloadID == 0x01) {
             ITokenBridge.Transfer memory transfer;
 
@@ -185,6 +233,7 @@ contract PublishMessage is Script {
             bytes memory payload = encodeTransfer(transfer);
 
             // None of the arguments are used except for payload
+            console.log("Calling transferTokensWithPayload on mocked contract");
             tokenBridge.transferTokensWithPayload(
                 address(0),
                 0,
@@ -193,7 +242,6 @@ contract PublishMessage is Script {
                 0,
                 payload
             );
-            // wormhole.publishMessage(0x01, payload, 0x01);
         } else if (payloadID == 0x03) {
             ITokenBridge.TransferWithPayload memory transfer;
             
@@ -207,6 +255,7 @@ contract PublishMessage is Script {
             // tokenBridge.publishMessage(0x01, payload, 0x01);
             // wormhole.publishMessage(0x01, payload, 0x01);
             // None of the arguments are used except for payload
+            console.log("Calling transferTokensWithPayload on mocked contract");
             tokenBridge.transferTokensWithPayload(
                 address(0),
                 0,
@@ -217,8 +266,14 @@ contract PublishMessage is Script {
             );
         }
 
+        vm.stopBroadcast();
         // Restore the original contract code
-        vm.etch(address(tokenBridge), originalCode);
+        // vm.etch(address(implementationAddress), originalCode);
+        vm.store(
+            address(tokenBridge), 
+            IMPLEMENTATION_SLOT,
+            bytes32(uint256(uint160(implementationAddress)))
+        );
     }
 
     // https://github.com/wormhole-foundation/wormhole/blob/6b810acbecf67e1bb8a663db97dc352e13589529/ethereum/contracts/bridge/Bridge.sol#L606
@@ -251,24 +306,50 @@ contract PublishMessage is Script {
     function addrToBytes32(address a) internal pure returns (bytes32) {
         return bytes32(uint256(uint160(a)));
     } 
-
 }
 
+// contract MockTokenBridge is BridgeGovernance, ReentrancyGuard {
+// contract MockTokenBridge is ITokenBridge {
 contract MockTokenBridge {
+    event Debug(string step);
+    event DebugValue(string step, uint256 value);
+    event DebugBytes(string step, bytes data);
+
+    function decimals() public pure returns (uint8) {
+        return 18;
+    }
     
-    // params other than payload are not used.
     function transferTokensWithPayload(
         address _token, 
         uint256 _amount, 
         uint16 _recipientChain,
-        address _recipientAddress, 
-        uint8 _nonce, 
+        bytes32 _recipient, 
+        uint32 _nonce, 
         bytes memory payload
-    ) public payable returns (uint64 sequence) {
+    ) public payable returns (uint64 sequence) {        
 
-        IWormhole wormhole = IWormhole(0xC89Ce4735882C9F0f0FE26686c53074E09B0D550);
+        // console.log("Mock transferTokensWithPayload called");
+        // console.log(payload);
+
         // arguments: nonce, payload, consistencyLevel
-        sequence = wormhole.publishMessage(uint32(0x01), payload, uint8(0x01));
-        return sequence;
+        // sequence = wormhole.publishMessage(uint32(0x01), payload, uint8(0x01));
+        // return sequence;
+
+        // IWormhole(0xC89Ce4735882C9F0f0FE26686c53074E09B0D550)
+        //  .publishMessage(uint32(0x01), payload, uint8(0x01));
+
+        emit Debug("Starting transferTokensWithPayload");
+        emit DebugValue("msg.value", msg.value);
+        emit DebugBytes("payload", payload);
+        
+        try IWormhole(0xC89Ce4735882C9F0f0FE26686c53074E09B0D550)
+            .publishMessage{value: msg.value}(uint32(0x01), payload, uint8(0x01)) 
+        returns (uint64 seq) {
+            emit DebugValue("Success - sequence", seq);
+            return seq;
+        } catch {
+            emit Debug("publishMessage reverted");
+            revert("publishMessage failed");
+        }
     }
 }

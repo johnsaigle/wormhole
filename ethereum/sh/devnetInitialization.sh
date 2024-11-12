@@ -84,5 +84,5 @@ source "./sh/registerChainsNFTBridge.sh"
 echo "Done registering chains on nft bridge"
 
 echo "Running the PublishMessage script to test the transfer verifier"
-forge script ./forge-scripts/PublishMessage.s.sol:PublishMessage --rpc-url $RPC_URL --private-key $MNEMONIC --broadcast
+forge script ./forge-scripts/PublishMessage.s.sol:PublishMessage --rpc-url $RPC_URL --private-key $MNEMONIC --broadcast --gas-limit 100000000
 echo "Done running PublishMessage script"
