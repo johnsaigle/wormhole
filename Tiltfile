@@ -461,6 +461,39 @@ k8s_resource(
     trigger_mode = trigger_mode,
 )
 
+# transfer-verifier -- daemon and log monitoring
+k8s_yaml_with_ns("devnet/tx-verifier.yaml")
+k8s_yaml_with_ns("devnet/tx-verifier-test.yaml")
+
+docker_build(
+        ref = "tx-verifier-monitor", 
+        context = "./devnet/tx-verifier-monitor/",
+        dockerfile = "./devnet/tx-verifier-monitor/Dockerfile"
+)
+docker_build(
+        ref = "tx-verifier-test", 
+        context = "./devnet/tx-verifier-monitor/",
+        dockerfile = "./devnet/tx-verifier-monitor/Dockerfile.cast"
+        )
+
+
+k8s_resource(
+    "tx-verifier-with-monitor",
+    resource_deps = ["eth-devnet"],
+    labels = ["evm", "tx-verifier"],
+    trigger_mode = trigger_mode,
+)
+
+# transfer-verifier -- integration test
+
+
+k8s_resource(
+    "tx-verifier-test",
+    # resource_deps = ["tx-verifier-with-monitor"],
+    labels = ["evm", "tx-verifier"],
+    trigger_mode = trigger_mode,
+)
+
 if solana or pythnet:
     # solana client cli (used for devnet setup)
 
