@@ -274,16 +274,15 @@ func processObjectUpdates(objectChanges []ObjectChange, suiApiConnection SuiApiI
 			continue
 		}
 
-		normalized := normalize(big.NewInt(int64(balanceDiff)), decimals)
+		normalized := normalize(balanceDiff, decimals)
 
 		// Add the key if it does not exist yet
 		key := fmt.Sprintf(KEY_FORMAT, address, chain)
-		if _, exists := transferredIntoBridge[key]; !exists {
-			transferredIntoBridge[key] = big.NewInt(0)
-		}
 
 		// Add the normalized amount to the transferredIntoBridge map
-		transferredIntoBridge[key] = new(big.Int).Add(transferredIntoBridge[key], normalized)
+		// Intentionally use 'Set' instead of 'Add' because there should only be a single objectChange per token
+		var amount big.Int
+		transferredIntoBridge[key] = amount.Set(normalized)
 
 		// Increment the number of changes processed
 		numChangesProcessed++
@@ -292,7 +291,7 @@ func processObjectUpdates(objectChanges []ObjectChange, suiApiConnection SuiApiI
 	return transferredIntoBridge, numChangesProcessed, nil
 }
 
-func processDigest(digest string, suiApiConnection SuiApiInterface, logger *zap.Logger) error {
+func processDigest(digest string, suiApiConnection SuiApiInterface, logger *zap.Logger) (uint, error) {
 	// Get the transaction block
 	txBlock, err := suiApiConnection.GetTransactionBlock(digest)
 
@@ -313,11 +312,12 @@ func processDigest(digest string, suiApiConnection SuiApiInterface, logger *zap.
 	// TODO: Using `Warn` for testing purposes. Update to Fatal? when ready to go into PR.
 	// TODO: Revisit error handling here.
 	for key, amountOut := range requestedOutOfBridge {
+
 		if _, exists := transferredIntoBridge[key]; !exists {
 			logger.Warn("transfer-out request for tokens that were never deposited",
 				zap.String("tokenAddress", key))
 			// TODO: Is it better to return or continue here?
-			return errors.New("transfer-out request for tokens that were never deposited")
+			return 0, errors.New("transfer-out request for tokens that were never deposited")
 			// continue
 		}
 
@@ -325,7 +325,7 @@ func processDigest(digest string, suiApiConnection SuiApiInterface, logger *zap.
 
 		if amountOut.Cmp(amountIn) > 0 {
 			logger.Warn("requested amount out is larger than amount in")
-			return errors.New("requested amount out is larger than amount in")
+			return 0, errors.New("requested amount out is larger than amount in")
 		}
 
 		keyParts := strings.Split(key, "-")
@@ -338,7 +338,7 @@ func processDigest(digest string, suiApiConnection SuiApiInterface, logger *zap.
 
 	logger.Info("Digest processed", zap.String("txDigest", digest), zap.Int("numEventsProcessed", numEventsProcessed), zap.Int("numChangesProcessed", numChangesProcessed))
 
-	return nil
+	return uint(numEventsProcessed), nil
 }
 
 type SuiApiResponse interface {

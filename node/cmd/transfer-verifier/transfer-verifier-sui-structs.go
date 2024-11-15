@@ -4,8 +4,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"regexp"
-	"strconv"
 	"strings"
 )
 
@@ -95,7 +95,7 @@ type ObjectChange struct {
 //   - ensure that the coin types match
 func (o ObjectChange) ValidateTypeInformation(expectedPackageId string) (success bool) {
 	// AI generated regex
-	re := regexp.MustCompile(`0x2::dynamic_field::Field<([^:]+)::token_registry::Key<([^>]+)>, ([^:]+)::([^<]+)<([^>]+)>>`)
+	re := regexp.MustCompile(`^0x2::dynamic_field::Field<([^:]+)::token_registry::Key<([^>]+)>, ([^:]+)::([^<]+)<([^>]+)>>$`)
 	matches := re.FindStringSubmatch(o.ObjectType)
 
 	if len(matches) == 6 {
@@ -134,33 +134,33 @@ type SuiTryMultiGetPastObjectsResponse struct {
 }
 
 // Gets the balance difference of the two result objects.
-func (r SuiTryMultiGetPastObjectsResponse) GetBalanceDiff() (int, error) {
+func (r SuiTryMultiGetPastObjectsResponse) GetBalanceDiff() (*big.Int, error) {
 
 	if len(r.Result) != 2 {
-		return 0, fmt.Errorf("incorrect number of results received")
+		return big.NewInt(0), fmt.Errorf("incorrect number of results received")
 	}
 
 	// Determine if the asset is wrapped or native
 	isWrapped, err := r.Result[0].IsWrapped()
 	if err != nil {
-		return 0, fmt.Errorf("error in checking if object is wrapped: %w", err)
+		return big.NewInt(0), fmt.Errorf("error in checking if object is wrapped: %w", err)
 	}
 
 	// TODO: Should we check that the other asset is also wrapped?
 	newBalance, err := r.Result[0].GetVersionBalance(isWrapped)
 	if err != nil {
-		return 0, fmt.Errorf("error in getting new balance: %w", err)
+		return big.NewInt(0), fmt.Errorf("error in getting new balance: %w", err)
 	}
 
 	oldBalance, err := r.Result[1].GetVersionBalance(isWrapped)
 	if err != nil {
-		return 0, fmt.Errorf("error in getting old balance: %w", err)
+		return big.NewInt(0), fmt.Errorf("error in getting old balance: %w", err)
 	}
 
-	difference := newBalance - oldBalance
+	difference := newBalance.Sub(newBalance, oldBalance)
 	// If the asset is wrapped, it means that the balance was burned, so the difference should be negative.
 	if isWrapped {
-		difference = -difference
+		difference = difference.Mul(difference, big.NewInt(-1))
 	}
 
 	return difference, nil
@@ -212,6 +212,48 @@ func (r SuiTryMultiGetPastObjectsResponse) GetTokenChain() (uint16, error) {
 	return chain0, nil
 }
 
+func (r SuiTryMultiGetPastObjectsResponse) GetObjectId() (string, error) {
+	objectId, err := r.Result[0].GetObjectId()
+	if err != nil {
+		return "", fmt.Errorf("could not get object id")
+	}
+
+	return objectId, nil
+}
+
+func (r SuiTryMultiGetPastObjectsResponse) GetVersion() (string, error) {
+	version, err := r.Result[0].GetVersion()
+	if err != nil {
+		return "", fmt.Errorf("could not get object id")
+	}
+
+	return version, nil
+}
+
+func (r SuiTryMultiGetPastObjectsResponse) GetPreviousVersion() (string, error) {
+	previousVersion, err := r.Result[1].GetVersion()
+	if err != nil {
+		return "", fmt.Errorf("could not get object id")
+	}
+
+	return previousVersion, nil
+}
+
+func (r SuiTryMultiGetPastObjectsResponse) GetObjectType() (string, error) {
+	type0, err0 := r.Result[0].GetObjectType()
+	type1, err1 := r.Result[1].GetObjectType()
+
+	if err0 != nil {
+		return "", fmt.Errorf("error in getting token chain: %w", err0)
+	} else if err1 != nil {
+		return "", fmt.Errorf("error in getting token chain: %w", err1)
+	} else if type0 != type1 {
+		return "", fmt.Errorf("token chain ids do not match")
+	}
+
+	return type0, nil
+}
+
 // The result object for suix_tryMultiGetPastObjects.
 type SuiTryMultiGetPastObjectsResult struct {
 	Status  string           `json:"status"`
@@ -231,9 +273,10 @@ func (r SuiTryMultiGetPastObjectsResult) IsWrapped() (bool, error) {
 }
 
 // Get the balance of the result object.
-func (r SuiTryMultiGetPastObjectsResult) GetVersionBalance(isWrapped bool) (int, error) {
+func (r SuiTryMultiGetPastObjectsResult) GetVersionBalance(isWrapped bool) (*big.Int, error) {
 
 	var path string
+	supplyInt := big.NewInt(0)
 
 	// The path to use for a native asset
 	pathNative := "content.fields.value.fields.custody"
@@ -250,13 +293,13 @@ func (r SuiTryMultiGetPastObjectsResult) GetVersionBalance(isWrapped bool) (int,
 	supply, err := extractFromJsonPath[string](*r.Details, path)
 
 	if err != nil {
-		return 0, fmt.Errorf("error in extracting wormhole balance: %w", err)
+		return supplyInt, fmt.Errorf("error in extracting wormhole balance: %w", err)
 	}
 
-	// TODO: This likely shouldn't be an int. It should be a big.Int?
-	supplyInt, err := strconv.Atoi(supply)
-	if err != nil {
-		return 0, fmt.Errorf("error converting supply to int: %w", err)
+	supplyInt, success := supplyInt.SetString(supply, 10)
+
+	if !success {
+		return supplyInt, fmt.Errorf("error converting supply to int: %w", err)
 	}
 
 	return supplyInt, nil
@@ -340,6 +383,42 @@ func (r SuiTryMultiGetPastObjectsResult) GetTokenChain() (uint16, error) {
 	}
 
 	return uint16(chain), nil
+}
+
+func (r SuiTryMultiGetPastObjectsResult) GetObjectId() (string, error) {
+	path := "objectId"
+
+	objectId, err := extractFromJsonPath[string](*r.Details, path)
+
+	if err != nil {
+		return "", fmt.Errorf("error in extracting objectId: %w", err)
+	}
+
+	return objectId, nil
+}
+
+func (r SuiTryMultiGetPastObjectsResult) GetVersion() (string, error) {
+	path := "version"
+
+	version, err := extractFromJsonPath[string](*r.Details, path)
+
+	if err != nil {
+		return "", fmt.Errorf("error in extracting version: %w", err)
+	}
+
+	return version, nil
+}
+
+func (r SuiTryMultiGetPastObjectsResult) GetObjectType() (string, error) {
+	path := "type"
+
+	version, err := extractFromJsonPath[string](*r.Details, path)
+
+	if err != nil {
+		return "", fmt.Errorf("error in extracting version: %w", err)
+	}
+
+	return version, nil
 }
 
 // Definition of the WormholeMessage event
