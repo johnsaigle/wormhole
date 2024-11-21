@@ -18,11 +18,16 @@ const (
 	SuiUsdcAddress      = "5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf"
 )
 
-func initGlobals() {
-	*suiCoreContract = "0x5306f64e312b581766351c07af79c72fcb1cd25147157fdc2f8ad76de9a3fb6a"
-	*suiTokenBridgeContract = "0x26efee2b51c911237888e5dc6702868abca3c7ac12c53f76ef8eba0697695e3d"
-	*suiTokenBridgeEmitter = "0xccceeb29348f71bdd22ffef43a2a19c1f5b5e17c5cca5411529120182672ade5"
-	suiEventType = fmt.Sprintf("%s::%s::%s", *suiCoreContract, suiModule, suiEventName)
+// func initGlobals() {
+// 	suiEventType = fmt.Sprintf("%s::%s::%s", *suiCoreContract, suiModule, suiEventName)
+// }
+
+func newTestSuiTransferVerifier() *SuiTransferVerifier {
+	suiCoreContract := "0x5306f64e312b581766351c07af79c72fcb1cd25147157fdc2f8ad76de9a3fb6a"
+	suiTokenBridgeContract := "0x26efee2b51c911237888e5dc6702868abca3c7ac12c53f76ef8eba0697695e3d"
+	suiTokenBridgeEmitter := "0xccceeb29348f71bdd22ffef43a2a19c1f5b5e17c5cca5411529120182672ade5"
+
+	return NewSuiTransferVerifier(suiCoreContract, suiTokenBridgeEmitter, suiTokenBridgeContract)
 }
 
 type MockSuiApiConnection struct {
@@ -110,12 +115,16 @@ func TestNewSuiApiConnection(t *testing.T) {
 }
 
 func TestProcessEvents(t *testing.T) {
-	initGlobals()
+	suiTxVerifier := newTestSuiTransferVerifier()
 
 	arbitraryEventType := "arbitrary::EventType"
 	arbitraryEmitter := "0x3117"
 
 	logger := zap.NewNop()
+
+	// Constants used throughout the tests
+	suiEventType := suiTxVerifier.suiEventType
+	suiTokenBridgeEmitter := suiTxVerifier.suiTokenBridgeEmitter
 
 	// Define test cases
 	tests := []struct {
@@ -136,7 +145,7 @@ func TestProcessEvents(t *testing.T) {
 				{
 					Type: &suiEventType,
 					Message: &WormholeMessage{
-						Sender:  suiTokenBridgeEmitter,
+						Sender:  &suiTokenBridgeEmitter,
 						Payload: generatePayload(1, big.NewInt(100), EthereumUsdcAddress, 2),
 					},
 				},
@@ -152,14 +161,14 @@ func TestProcessEvents(t *testing.T) {
 				{
 					Type: &suiEventType,
 					Message: &WormholeMessage{
-						Sender:  suiTokenBridgeEmitter,
+						Sender:  &suiTokenBridgeEmitter,
 						Payload: generatePayload(1, big.NewInt(100), EthereumUsdcAddress, uint16(vaa.ChainIDEthereum)),
 					},
 				},
 				{
 					Type: &suiEventType,
 					Message: &WormholeMessage{
-						Sender:  suiTokenBridgeEmitter,
+						Sender:  &suiTokenBridgeEmitter,
 						Payload: generatePayload(1, big.NewInt(100), EthereumUsdcAddress, uint16(vaa.ChainIDEthereum)),
 					},
 				},
@@ -175,14 +184,14 @@ func TestProcessEvents(t *testing.T) {
 				{
 					Type: &suiEventType,
 					Message: &WormholeMessage{
-						Sender:  suiTokenBridgeEmitter,
+						Sender:  &suiTokenBridgeEmitter,
 						Payload: generatePayload(1, big.NewInt(100), EthereumUsdcAddress, uint16(vaa.ChainIDEthereum)),
 					},
 				},
 				{
 					Type: &suiEventType,
 					Message: &WormholeMessage{
-						Sender:  suiTokenBridgeEmitter,
+						Sender:  &suiTokenBridgeEmitter,
 						Payload: generatePayload(1, big.NewInt(100), SuiUsdcAddress, uint16(vaa.ChainIDSui)),
 					},
 				},
@@ -213,14 +222,14 @@ func TestProcessEvents(t *testing.T) {
 				{
 					Type: &suiEventType,
 					Message: &WormholeMessage{
-						Sender:  suiTokenBridgeEmitter,
+						Sender:  &suiTokenBridgeEmitter,
 						Payload: generatePayload(1, big.NewInt(100), EthereumUsdcAddress, uint16(vaa.ChainIDEthereum)),
 					},
 				},
 				{
 					Type: &arbitraryEventType,
 					Message: &WormholeMessage{
-						Sender:  suiTokenBridgeEmitter,
+						Sender:  &suiTokenBridgeEmitter,
 						Payload: generatePayload(1, big.NewInt(100), SuiUsdcAddress, uint16(vaa.ChainIDSui)),
 					},
 				},
@@ -236,14 +245,14 @@ func TestProcessEvents(t *testing.T) {
 				{ // Invalid payload type
 					Type: &suiEventType,
 					Message: &WormholeMessage{
-						Sender:  suiTokenBridgeEmitter,
+						Sender:  &suiTokenBridgeEmitter,
 						Payload: generatePayload(0, big.NewInt(100), EthereumUsdcAddress, uint16(vaa.ChainIDEthereum)),
 					},
 				},
 				{ // Empty payload
 					Type: &suiEventType,
 					Message: &WormholeMessage{
-						Sender:  suiTokenBridgeEmitter,
+						Sender:  &suiTokenBridgeEmitter,
 						Payload: []byte{},
 					},
 				},
@@ -256,7 +265,7 @@ func TestProcessEvents(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 
-			result, count := processEvents(tt.events, logger)
+			result, count := suiTxVerifier.processEvents(tt.events, logger)
 
 			assert.Equal(t, tt.expectedResult, result)
 			assert.Equal(t, tt.expectedCount, count)
@@ -265,7 +274,7 @@ func TestProcessEvents(t *testing.T) {
 }
 
 func TestProcessObjectUpdates(t *testing.T) {
-	initGlobals()
+	suiTxVerifier := newTestSuiTransferVerifier()
 
 	logger := zap.NewNop() // zap.Must(zap.NewDevelopment())
 
@@ -678,7 +687,7 @@ func TestProcessObjectUpdates(t *testing.T) {
 			}
 
 			// Run function and check results
-			transferredIntoBridge, numEventsProcessed, _ := processObjectUpdates(tt.objectChanges, connection, logger)
+			transferredIntoBridge, numEventsProcessed, _ := suiTxVerifier.processObjectUpdates(tt.objectChanges, connection, logger)
 			assert.Equal(t, tt.expectedResult, transferredIntoBridge)
 			assert.Equal(t, tt.expectedCount, numEventsProcessed)
 		})
@@ -687,8 +696,7 @@ func TestProcessObjectUpdates(t *testing.T) {
 
 // TODO
 func TestProcessDigest(t *testing.T) {
-
-	initGlobals()
+	suiTxVerifier := newTestSuiTransferVerifier()
 
 	// Constants used throughout the tests
 	normalObjectNativeType := "0x2::dynamic_field::Field<0x26efee2b51c911237888e5dc6702868abca3c7ac12c53f76ef8eba0697695e3d::token_registry::Key<0x2::sui::SUI>, 0x26efee2b51c911237888e5dc6702868abca3c7ac12c53f76ef8eba0697695e3d::native_asset::NativeAsset<0x2::sui::SUI>>"
@@ -702,6 +710,9 @@ func TestProcessDigest(t *testing.T) {
 	normalTokenAddressNative := "93,75,48,37,6,100,92,55,255,19,59,152,196,181,10,90,225,72,65,101,151,56,214,215,51,213,157,13,33,122,147,191"
 	normalChainIdNative := "21"
 	normalChainIdForeign := "2"
+
+	suiEventType := suiTxVerifier.suiEventType
+	suiTokenBridgeEmitter := suiTxVerifier.suiTokenBridgeEmitter
 
 	logger := zap.Must(zap.NewDevelopment())
 
@@ -739,7 +750,7 @@ func TestProcessDigest(t *testing.T) {
 				{
 					Type: &suiEventType,
 					Message: &WormholeMessage{
-						Sender:  suiTokenBridgeEmitter,
+						Sender:  &suiTokenBridgeEmitter,
 						Payload: generatePayload(1, big.NewInt(990), SuiUsdcAddress, uint16(vaa.ChainIDSui)),
 					},
 				},
@@ -771,7 +782,7 @@ func TestProcessDigest(t *testing.T) {
 				{
 					Type: &suiEventType,
 					Message: &WormholeMessage{
-						Sender:  suiTokenBridgeEmitter,
+						Sender:  &suiTokenBridgeEmitter,
 						Payload: generatePayload(1, big.NewInt(100000), SuiUsdcAddress, uint16(vaa.ChainIDSui)),
 					},
 				},
@@ -787,7 +798,7 @@ func TestProcessDigest(t *testing.T) {
 				{
 					Type: &suiEventType,
 					Message: &WormholeMessage{
-						Sender:  suiTokenBridgeEmitter,
+						Sender:  &suiTokenBridgeEmitter,
 						Payload: generatePayload(1, big.NewInt(100000), SuiUsdcAddress, uint16(vaa.ChainIDSui)),
 					},
 				},
@@ -819,7 +830,7 @@ func TestProcessDigest(t *testing.T) {
 				{
 					Type: &suiEventType,
 					Message: &WormholeMessage{
-						Sender:  suiTokenBridgeEmitter,
+						Sender:  &suiTokenBridgeEmitter,
 						Payload: generatePayload(1, big.NewInt(990), EthereumUsdcAddress, uint16(vaa.ChainIDEthereum)),
 					},
 				},
@@ -835,7 +846,7 @@ func TestProcessDigest(t *testing.T) {
 				{
 					Type: &suiEventType,
 					Message: &WormholeMessage{
-						Sender:  suiTokenBridgeEmitter,
+						Sender:  &suiTokenBridgeEmitter,
 						Payload: generatePayload(1, big.NewInt(100000), SuiUsdcAddress, uint16(vaa.ChainIDSui)),
 					},
 				},
@@ -867,14 +878,14 @@ func TestProcessDigest(t *testing.T) {
 				{
 					Type: &suiEventType,
 					Message: &WormholeMessage{
-						Sender:  suiTokenBridgeEmitter,
+						Sender:  &suiTokenBridgeEmitter,
 						Payload: generatePayload(1, big.NewInt(990), EthereumUsdcAddress, uint16(vaa.ChainIDEthereum)),
 					},
 				},
 				{
 					Type: &suiEventType,
 					Message: &WormholeMessage{
-						Sender:  suiTokenBridgeEmitter,
+						Sender:  &suiTokenBridgeEmitter,
 						Payload: generatePayload(1, big.NewInt(1000), EthereumUsdcAddress, uint16(vaa.ChainIDEthereum)),
 					},
 				},
@@ -906,14 +917,14 @@ func TestProcessDigest(t *testing.T) {
 				{
 					Type: &suiEventType,
 					Message: &WormholeMessage{
-						Sender:  suiTokenBridgeEmitter,
+						Sender:  &suiTokenBridgeEmitter,
 						Payload: generatePayload(1, big.NewInt(990), EthereumUsdcAddress, uint16(vaa.ChainIDEthereum)),
 					},
 				},
 				{
 					Type: &suiEventType,
 					Message: &WormholeMessage{
-						Sender:  suiTokenBridgeEmitter,
+						Sender:  &suiTokenBridgeEmitter,
 						Payload: generatePayload(1, big.NewInt(1001), EthereumUsdcAddress, uint16(vaa.ChainIDEthereum)),
 					},
 				},
@@ -939,7 +950,7 @@ func TestProcessDigest(t *testing.T) {
 				connection.SetObjectsResponse(responseObject)
 			}
 
-			numProcessed, err := processDigest("HASH", connection, logger)
+			numProcessed, err := suiTxVerifier.ProcessDigest("HASH", connection, logger)
 
 			assert.Equal(t, true, tt.expectedError == "" && err == nil || err != nil && err.Error() == tt.expectedError)
 			assert.Equal(t, tt.expectedCount, numProcessed)
@@ -991,8 +1002,8 @@ func generateResponsesObject(objectId string, version string, objectType string,
 	var oldVersion string
 
 	if isWrapped == false {
-		newVersion = generateResponseObjectNative(objectId, version, objectType, balanceAfter, tokenAddress, tokenChain, decimals)
-		oldVersion = generateResponseObjectNative(objectId, previousVersion, objectType, balanceBefore, tokenAddress, tokenChain, decimals)
+		newVersion = generateResponseObjectNative(objectId, version, objectType, balanceAfter, tokenAddress, decimals)
+		oldVersion = generateResponseObjectNative(objectId, previousVersion, objectType, balanceBefore, tokenAddress, decimals)
 	} else {
 		newVersion = generateResponseObjectForeign(objectId, version, objectType, balanceAfter, tokenAddress, tokenChain, decimals)
 		oldVersion = generateResponseObjectForeign(objectId, previousVersion, objectType, balanceBefore, tokenAddress, tokenChain, decimals)
@@ -1010,7 +1021,7 @@ func generateResponsesObject(objectId string, version string, objectType string,
 	return data
 }
 
-func generateResponseObjectNative(objectId string, version string, objectType string, balance string, tokenAddress string, tokenChain string, decimals uint8) string {
+func generateResponseObjectNative(objectId string, version string, objectType string, balance string, tokenAddress string, decimals uint8) string {
 	json_string_per_object := fmt.Sprintf(`{
 		"objectId": "%s",
 		"version": "%s",

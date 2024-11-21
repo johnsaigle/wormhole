@@ -11,7 +11,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	fmtString "fmt"
+
 	"math/big"
 	"time"
 
@@ -90,19 +90,48 @@ type TransferVerifier[E evmClient, C connector] struct {
 	ethConnector C
 	// Corresponds to an ethClient from go-ethereum
 	client E
+	// Mapping to track the transactions that have been processed. Indexed by a log's txHash.
+	processedTransactions map[common.Hash]*types.Receipt
+	// The latest transaction block number, used to determine the size of historic receipts to keep in memory.
+	lastBlockNumber uint64
+	// The block height difference between the latest block and the oldest block to keep in memory.
+	pruneHeightDelta uint64
+
+	// Holds previously-recorded decimals (uint8) for token addresses
+	// (common.Address) that have been observed.
+	decimalsCache map[common.Address]uint8
+
+	// Records whether an asset is wrapped but does not store the native data
+	isWrappedCache map[string]bool
+
+	// Maps the 32-byte token addresses received via LogMessagePublished
+	// events to their unwrapped 20-byte addresses. This mapping is also
+	// used for non-wrapped token addresses.
+	wrappedCache map[string]common.Address
+
+	// Native chain cache for wrapped assets.
+	nativeChainCache map[string]vaa.ChainID
 }
 
-func NewTransferVerifier(connector connectors.Connector, tvAddrs *TVAddresses, logger *zap.Logger) *TransferVerifier[*ethClient.Client, connectors.Connector] {
+func NewTransferVerifier(connector connectors.Connector, tvAddrs *TVAddresses, pruneHeightDelta uint64, logger *zap.Logger) *TransferVerifier[*ethClient.Client, connectors.Connector] {
 	return &TransferVerifier[*ethClient.Client, connectors.Connector]{
-		Addresses:    tvAddrs,
-		ethConnector: connector,
-		logger:       *logger,
-		client:       connector.Client(),
+		Addresses:             tvAddrs,
+		logger:                *logger,
+		ethConnector:          connector,
+		client:                connector.Client(),
+		processedTransactions: make(map[common.Hash]*types.Receipt),
+		lastBlockNumber:       0,
+		pruneHeightDelta:      pruneHeightDelta,
+		decimalsCache:         make(map[common.Address]uint8),
+		isWrappedCache:        make(map[string]bool),
+		wrappedCache:          make(map[string]common.Address),
+		nativeChainCache:      make(map[string]vaa.ChainID),
 	}
 }
 
 type connector interface {
 	ParseLogMessagePublished(log types.Log) (*ethabi.AbiLogMessagePublished, error)
+	TransactionReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, error)
 }
 
 type evmClient interface {
@@ -580,7 +609,7 @@ func (tv *TransferVerifier[ethClient, connector]) unwrapIfWrapped(
 
 	// If the token address already exists in the wrappedCache mapping the
 	// cached value can be returned.
-	if addr, exists := wrappedCache[tokenAddressAsKey]; exists {
+	if addr, exists := tv.wrappedCache[tokenAddressAsKey]; exists {
 		tv.logger.Debug("wrapped asset found in cache, returning")
 		return addr, nil
 	}
@@ -600,18 +629,18 @@ func (tv *TransferVerifier[ethClient, connector]) unwrapIfWrapped(
 	tv.logger.Debug("calling wrappedAsset",
 		zap.Uint16("tokenChain", uint16(tokenChain)),
 		zap.String("tokenChainString", tokenChain.String()),
-		zap.String("tokenAddress", fmtString.Sprintf("%x", tokenAddress)),
-		zap.String("callData", fmtString.Sprintf("%x", calldata)))
+		zap.String("tokenAddress", fmt.Sprintf("%x", tokenAddress)),
+		zap.String("callData", fmt.Sprintf("%x", calldata)))
 
 	result, err := tv.client.CallContract(ctx, ethCallMsg, nil)
 	if err != nil {
 		// This strictly handles the error case. The contract call will
 		// return the zero address for assets not in its map.
-		return common.Address{}, fmtString.Errorf("failed to get mapping for token %s", tokenAddressAsKey)
+		return common.Address{}, fmt.Errorf("failed to get mapping for token %s", tokenAddressAsKey)
 	}
 
 	tokenAddressNative := common.BytesToAddress(result)
-	wrappedCache[tokenAddressAsKey] = tokenAddressNative
+	tv.wrappedCache[tokenAddressAsKey] = tokenAddressNative
 
 	tv.logger.Debug("got wrappedAsset result",
 		zap.String("tokenAddressNative", fmt.Sprintf("%x", tokenAddressNative)))
@@ -641,7 +670,7 @@ func (tv *TransferVerifier[ethClient, Connector]) chainId(
 
 	// If the token address already exists in the wrappedCache mapping the
 	// cached value can be returned.
-	if chainId, exists := nativeChainCache[tokenAddressAsKey]; exists {
+	if chainId, exists := tv.nativeChainCache[tokenAddressAsKey]; exists {
 		tv.logger.Debug("wrapped asset found in native chain cache, returning")
 		return chainId, nil
 	}
@@ -674,7 +703,7 @@ func (tv *TransferVerifier[ethClient, Connector]) chainId(
 	// TODO: should this be big endian?
 	chainID := vaa.ChainID(binary.LittleEndian.Uint16(result))
 
-	nativeChainCache[tokenAddressAsKey] = chainID
+	tv.nativeChainCache[tokenAddressAsKey] = chainID
 
 	return chainID, nil
 }
@@ -690,7 +719,7 @@ func (tv *TransferVerifier[ethClient, Connector]) isWrappedAsset(
 
 	// If the token address already exists in the isWrappedCache mapping the
 	// cached value can be returned.
-	if wrapped, exists := isWrappedCache[tokenAddressAsKey]; exists {
+	if wrapped, exists := tv.isWrappedCache[tokenAddressAsKey]; exists {
 		tv.logger.Debug("asset found in isWrapped cache, returning")
 		return wrapped, nil
 	}
@@ -725,7 +754,7 @@ func (tv *TransferVerifier[ethClient, Connector]) isWrappedAsset(
 	// TODO is 1 == true? Does this work?
 	wrapped := result[EVM_WORD_LENGTH-1] == 1
 
-	isWrappedCache[tokenAddressAsKey] = wrapped
+	tv.isWrappedCache[tokenAddressAsKey] = wrapped
 
 	return wrapped, nil
 }
@@ -768,7 +797,7 @@ func relevant[L TransferLog](tLog TransferLog, tv *TVAddresses) (key string, rel
 		}
 
 	}
-	return fmtString.Sprintf(KEY_FORMAT, tLog.OriginAddress(), tLog.OriginChain()), true
+	return fmt.Sprintf(KEY_FORMAT, tLog.OriginAddress(), tLog.OriginChain()), true
 }
 
 // Custom error type indicating an issue in issue in a type that implements the
@@ -893,9 +922,9 @@ func (tv *TransferVerifier[evmClient, connector]) getDecimals(
 	defer cancel()
 
 	// First check if this token's decimals is stored in cache
-	if _, exists := decimalsCache[tokenAddress]; exists {
+	if _, exists := tv.decimalsCache[tokenAddress]; exists {
 		tv.logger.Debug("asset decimals found in cache, returning")
-		return decimalsCache[tokenAddress], nil
+		return tv.decimalsCache[tokenAddress], nil
 	}
 
 	// If the decimals aren't cached, perform an eth_call lookup for the decimals
@@ -928,7 +957,7 @@ func (tv *TransferVerifier[evmClient, connector]) getDecimals(
 	decimals = result[EVM_WORD_LENGTH-1]
 
 	// Add the decimal value to the cache
-	decimalsCache[tokenAddress] = decimals
+	tv.decimalsCache[tokenAddress] = decimals
 	tv.logger.Debug("adding new token's decimals to cache",
 		zap.String("tokenAddress", tokenAddress.String()),
 		zap.Uint8("tokenDecimals", decimals))

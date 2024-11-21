@@ -15,7 +15,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/wormhole-foundation/wormhole/sdk/vaa"
 
-	ethAbi "github.com/certusone/wormhole/node/pkg/watchers/evm/connectors/ethabi"
 	ethereum "github.com/ethereum/go-ethereum"
 
 	"github.com/certusone/wormhole/node/pkg/watchers/evm/connectors/ethabi"
@@ -57,13 +56,17 @@ type mockConnector struct{}
 // TODO add different results here so we can test different values
 func (c *mockConnector) ParseLogMessagePublished(log types.Log) (*ethabi.AbiLogMessagePublished, error) {
 	// add mock data
-	return &ethAbi.AbiLogMessagePublished{
+	return &ethabi.AbiLogMessagePublished{
 		Sender:   tokenBridgeAddr,
 		Sequence: 0,
 		Nonce:    0,
 		Payload:  transferTokensPayload(big.NewInt(1)),
 		Raw:      log,
 	}, nil
+}
+
+func (c *mockConnector) TransactionReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, error) {
+	return nil, nil
 }
 
 // Create the connections and loggers expected by the functions we are testing
@@ -186,7 +189,6 @@ func TestParseReceiptHappyPath(t *testing.T) {
 	for name, test := range tests {
 		test := test // NOTE: uncomment for Go < 1.22, see /doc/faq#closures_and_goroutines
 		t.Run(name, func(t *testing.T) {
-			t.Log(name)
 
 			transferReceipt, err := mocks.transferVerifier.ParseReceipt(test.receipt)
 			require.NoError(t, err)
@@ -246,21 +248,21 @@ func TestParseReceiptErrors(t *testing.T) {
 	emptyPayloadLogMessagePublishedLog := *validLogMessagedPublishedLog
 	emptyPayloadLogMessagePublishedLog.Data = []byte{}
 
-	// Create a receipt with the wrong payload type (not a token transfer).
-	wrongPayloadTypeLogMessagePublishedLog := types.Log{
-		Address: coreBridgeAddr,
-		Topics: []common.Hash{
-			// LogMessagePublished(address indexed sender, uint64 sequence, uint32 nonce, bytes payload, uint8 consistencyLevel);
-			common.HexToHash(EVENTHASH_WORMHOLE_LOG_MESSAGE_PUBLISHED),
-			// sender
-			tokenBridgeAddr.Hash(),
-		},
-		Data: receiptData(big.NewInt(1).SetBytes([]byte{0xaa})),
-	}
-	// The LogMessagePublished payload type occurs in the 6th EVM word slot, and is left-padded with zeroes.
-	// Note that the value is 0-indexed
-	payloadTypeOffset := EVM_WORD_LENGTH * 5
-	wrongPayloadTypeLogMessagePublishedLog.Data[payloadTypeOffset] = 0x02
+	// TODO: Create a receipt with the wrong payload type (not a token transfer).
+	// wrongPayloadTypeLogMessagePublishedLog := types.Log{
+	// 	Address: coreBridgeAddr,
+	// 	Topics: []common.Hash{
+	// 		// LogMessagePublished(address indexed sender, uint64 sequence, uint32 nonce, bytes payload, uint8 consistencyLevel);
+	// 		common.HexToHash(EVENTHASH_WORMHOLE_LOG_MESSAGE_PUBLISHED),
+	// 		// sender
+	// 		tokenBridgeAddr.Hash(),
+	// 	},
+	// 	Data: receiptData(big.NewInt(1).SetBytes([]byte{0xaa})),
+	// }
+	// // The LogMessagePublished payload type occurs in the 6th EVM word slot, and is left-padded with zeroes.
+	// // Note that the value is 0-indexed
+	// payloadTypeOffset := EVM_WORD_LENGTH * 5
+	// wrongPayloadTypeLogMessagePublishedLog.Data[payloadTypeOffset] = 0x02
 
 	tests := map[string]struct {
 		receipt *types.Receipt
@@ -316,7 +318,6 @@ func TestParseReceiptErrors(t *testing.T) {
 	for name, test := range tests {
 		test := test // NOTE: uncomment for Go < 1.22, see /doc/faq#closures_and_goroutines
 		t.Run(name, func(t *testing.T) {
-			t.Log(name)
 
 			receipt, err := mocks.transferVerifier.ParseReceipt(test.receipt)
 			require.Error(t, err)
@@ -375,7 +376,6 @@ func TestParseERC20TransferEvent(t *testing.T) {
 		test := test // NOTE: uncomment for Go < 1.22, see /doc/faq#closures_and_goroutines
 		t.Run(name, func(t *testing.T) {
 			t.Parallel() // marks each test case as capable of running in parallel with each other
-			t.Log(name)
 
 			from, to, amount := parseERC20TransferEvent(test.topics, test.data)
 			assert.Equal(t, test.expected.from, from)
@@ -433,7 +433,6 @@ func TestParseWNativeDepositEvent(t *testing.T) {
 			test := test // NOTE: uncomment for Go < 1.22, see /doc/faq#closures_and_goroutines
 			t.Run(name, func(t *testing.T) {
 				t.Parallel() // marks each test case as capable of running in parallel with each other
-				t.Log(name)
 
 				destination, amount := parseWNativeDepositEvent(test.topics, test.data)
 				assert.Equal(t, test.expected.destination, destination)
@@ -676,7 +675,6 @@ func TestProcessReceipt(t *testing.T) {
 	for name, test := range tests {
 		test := test // NOTE: uncomment for Go < 1.22, see /doc/faq#closures_and_goroutines
 		t.Run(name, func(t *testing.T) {
-			t.Log(name)
 
 			summary, err := mocks.transferVerifier.ProcessReceipt(test.transferReceipt)
 

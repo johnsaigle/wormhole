@@ -206,7 +206,6 @@ func TestDenormalize(t *testing.T) {
 		test := test // NOTE: uncomment for Go < 1.22, see /doc/faq#closures_and_goroutines
 		t.Run(name, func(t *testing.T) {
 			t.Parallel() // marks each test case as capable of running in parallel with each other
-			t.Log(name)
 
 			if got := denormalize(test.amount, test.decimals); got.Cmp(test.expected) != 0 {
 				t.Fatalf("denormalize(%s, %d) returned %s; expected %s",

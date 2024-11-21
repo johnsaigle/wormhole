@@ -165,7 +165,6 @@ func TestRelevantDeposit(t *testing.T) {
 		test := test // NOTE: uncomment for Go < 1.22, see /doc/faq#closures_and_goroutines
 		t.Run(name, func(t *testing.T) {
 			t.Parallel() // marks each test case as capable of running in parallel with each other
-			t.Log(name)
 
 			key, relevant := relevant[*NativeDeposit](&test.input, mocks.transferVerifier.Addresses)
 			assert.Equal(t, test.expected.key, key)
@@ -183,7 +182,6 @@ func TestRelevantDeposit(t *testing.T) {
 		test := test // NOTE: uncomment for Go < 1.22, see /doc/faq#closures_and_goroutines
 		t.Run(name, func(t *testing.T) {
 			t.Parallel() // marks each test case as capable of running in parallel with each other
-			t.Log(name)
 
 			key, relevant := relevant[*ERC20Transfer](&test.input, mocks.transferVerifier.Addresses)
 			assert.Equal(t, test.expected.key, key)
@@ -201,7 +199,6 @@ func TestRelevantDeposit(t *testing.T) {
 		test := test // NOTE: uncomment for Go < 1.22, see /doc/faq#closures_and_goroutines
 		t.Run(name, func(t *testing.T) {
 			t.Parallel() // marks each test case as capable of running in parallel with each other
-			t.Log(name)
 
 			key, relevant := relevant[*LogMessagePublished](&test.input, mocks.transferVerifier.Addresses)
 			assert.Equal(t, test.expected.key, key)
@@ -268,7 +265,6 @@ func TestValidateDeposit(t *testing.T) {
 		test := test // NOTE: uncomment for Go < 1.22, see /doc/faq#closures_and_goroutines
 		t.Run(name, func(t *testing.T) {
 			t.Parallel() // marks each test case as capable of running in parallel with each other
-			t.Log(name)
 
 			err := validate[*NativeDeposit](&test.deposit)
 			require.Error(t, err)
@@ -292,7 +288,6 @@ func TestValidateDeposit(t *testing.T) {
 		test := test // NOTE: uncomment for Go < 1.22, see /doc/faq#closures_and_goroutines
 		t.Run(name, func(t *testing.T) {
 			t.Parallel() // marks each test case as capable of running in parallel with each other
-			t.Log(name)
 
 			err := validate[*NativeDeposit](&test.deposit)
 			require.NoError(t, err)
@@ -356,7 +351,6 @@ func TestValidateERC20Transfer(t *testing.T) {
 		test := test // NOTE: uncomment for Go < 1.22, see /doc/faq#closures_and_goroutines
 		t.Run(name, func(t *testing.T) {
 			t.Parallel() // marks each test case as capable of running in parallel with each other
-			t.Log(name)
 
 			err := validate[*ERC20Transfer](&test.input)
 			require.Error(t, err)
@@ -400,7 +394,6 @@ func TestValidateERC20Transfer(t *testing.T) {
 		test := test // NOTE: uncomment for Go < 1.22, see /doc/faq#closures_and_goroutines
 		t.Run(name, func(t *testing.T) {
 			t.Parallel() // marks each test case as capable of running in parallel with each other
-			t.Log(name)
 
 			err := validate[*ERC20Transfer](&test.transfer)
 			require.NoError(t, err)
@@ -605,7 +598,6 @@ func TestValidateLogMessagePublished(t *testing.T) {
 		test := test // NOTE: uncomment for Go < 1.22, see /doc/faq#closures_and_goroutines
 		t.Run(name, func(t *testing.T) {
 			t.Parallel() // marks each test case as capable of running in parallel with each other
-			t.Log(name)
 
 			err := validate[*LogMessagePublished](&test.logMessagePublished)
 			require.Error(t, err)
@@ -653,7 +645,6 @@ func TestValidateLogMessagePublished(t *testing.T) {
 		test := test // NOTE: uncomment for Go < 1.22, see /doc/faq#closures_and_goroutines
 		t.Run(name, func(t *testing.T) {
 			t.Parallel() // marks each test case as capable of running in parallel with each other
-			t.Log(name)
 
 			err := validate[*LogMessagePublished](&test.input)
 			require.NoError(t, err)
@@ -715,7 +706,6 @@ func TestVAAFromAddr(t *testing.T) {
 		test := test // NOTE: uncomment for Go < 1.22, see /doc/faq#closures_and_goroutines
 		t.Run(name, func(t *testing.T) {
 			t.Parallel() // marks each test case as capable of running in parallel with each other
-			t.Log(name)
 
 			res := VAAAddrFrom(test.input)
 			assert.Equal(t, test.expected, res)
@@ -758,7 +748,6 @@ func TestDepositFrom(t *testing.T) {
 		test := test // NOTE: uncomment for Go < 1.22, see /doc/faq#closures_and_goroutines
 		t.Run(name, func(t *testing.T) {
 			t.Parallel() // marks each test case as capable of running in parallel with each other
-			t.Log(name)
 
 			deposit, err := DepositFrom(&test.log)
 			assert.Equal(t, test.expected, deposit)
@@ -793,8 +782,8 @@ func TestParseERC20TransferFrom(t *testing.T) {
 				TokenAddress: usdcAddr,
 				// Default token chain for a transfer.
 				TokenChain: NATIVE_CHAIN_ID,
-				From:         eoaAddrGeth,
-				To:           tokenBridgeAddr,
+				From:       eoaAddrGeth,
+				To:         tokenBridgeAddr,
 				Amount:     big.NewInt(100),
 			},
 		},
@@ -815,8 +804,8 @@ func TestParseERC20TransferFrom(t *testing.T) {
 				TokenAddress: usdcAddr,
 				// Default token chain for a transfer.
 				TokenChain: NATIVE_CHAIN_ID,
-				From:         eoaAddrGeth,
-				To:           ZERO_ADDRESS,
+				From:       eoaAddrGeth,
+				To:         ZERO_ADDRESS,
 				Amount:     big.NewInt(100),
 			},
 		},
@@ -826,7 +815,6 @@ func TestParseERC20TransferFrom(t *testing.T) {
 		test := test // NOTE: uncomment for Go < 1.22, see /doc/faq#closures_and_goroutines
 		t.Run(name, func(t *testing.T) {
 			t.Parallel() // marks each test case as capable of running in parallel with each other
-			t.Log(name)
 
 			transfer, err := ERC20TransferFrom(&test.log)
 			assert.Equal(t, test.expected, transfer)
@@ -835,7 +823,7 @@ func TestParseERC20TransferFrom(t *testing.T) {
 	}
 
 	invalidTests := map[string]struct {
-		log      types.Log
+		log types.Log
 	}{
 		"invalid transfer: From is zero address": {
 			log: types.Log{
@@ -857,13 +845,11 @@ func TestParseERC20TransferFrom(t *testing.T) {
 		test := invalidTest // NOTE: uncomment for Go < 1.22, see /doc/faq#closures_and_goroutines
 		t.Run(name, func(t *testing.T) {
 			t.Parallel() // marks each test case as capable of running in parallel with each other
-			t.Log(name)
 
 			transfer, err := ERC20TransferFrom(&test.log)
 			require.Error(t, err)
 			assert.Nil(t, transfer)
 		})
 	}
-
 
 }
