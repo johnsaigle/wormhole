@@ -61,7 +61,7 @@ func (s *SuiTransferVerifier) GetEventFilter() string {
 // that maps the token address and chain ID to the amount requested out of the bridge. It does not return an error, because any faulty
 // events can be skipped, since they would likely fail being processed by the guardian as well. Debug level logging can be used to
 // reveal any potential locations where errors are occurring.
-func (s *SuiTransferVerifier) processEvents(events []SuiEvent, logger *zap.Logger) (requestedOutOfBridge map[string]*big.Int, numEventsProcessed int) {
+func (s *SuiTransferVerifier) processEvents(events []SuiEvent, logger *zap.Logger) (requestedOutOfBridge map[string]*big.Int, numEventsProcessed uint) {
 	// Initialize the map to store the amount requested out of the bridge
 	requestedOutOfBridge = make(map[string]*big.Int)
 
@@ -205,9 +205,10 @@ func (s *SuiTransferVerifier) ProcessDigest(digest string, suiApiConnection SuiA
 			zap.String("amountIn", amountIn.String()))
 	}
 
-	logger.Info("Digest processed", zap.String("txDigest", digest), zap.Int("numEventsProcessed", numEventsProcessed), zap.Int("numChangesProcessed", numChangesProcessed))
+	//nolint:gosec
+	logger.Info("Digest processed", zap.String("txDigest", digest), zap.Int("numEventsProcessed", int(numEventsProcessed)), zap.Int("numChangesProcessed", numChangesProcessed))
 
-	return uint(numEventsProcessed), nil
+	return numEventsProcessed, nil
 }
 
 type SuiApiResponse interface {
