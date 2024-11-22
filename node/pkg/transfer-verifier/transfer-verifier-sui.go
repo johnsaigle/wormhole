@@ -2,7 +2,6 @@ package transferverifier
 
 // TODOs:
 //	* balances on Sui are stored as u64's. Consider using uint64 instead of big.Int
-//  * create a utils.go to share functionality between transfer verifiers
 
 import (
 	"encoding/json"
