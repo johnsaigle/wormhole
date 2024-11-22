@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
-# Before running this script, ensure that anvil is running, e.g.:
-#
-# anvil --host 0.0.0.0 --base-fee 0 --fork-url $(worm info rpc mainnet ethereum) --mnemonic "myth like bonus scare over problem client lizard pioneer submit female collect" --fork-block-number 20641947 --fork-chain-id 1 --chain-id 1 --steps-tracing --auto-impersonate
-
 set -xeuo pipefail
 
 # mainnet core contract
@@ -15,7 +11,6 @@ TOKEN_BRIDGE_EMITTER="0xccceeb29348f71bdd22ffef43a2a19c1f5b5e17c5cca541152912018
 RPC=<RPC_HERE>
 
 LOG_LEVEL="info"
-
 
 # Do `make node` first to compile transfer-verifier into guardiand
 /guardiand transfer-verifier-sui --suiRPC "${RPC}" \
