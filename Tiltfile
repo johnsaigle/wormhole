@@ -476,7 +476,6 @@ docker_build(
         dockerfile = "./devnet/tx-verifier-monitor/Dockerfile.cast"
         )
 
-
 k8s_resource(
     "tx-verifier-with-monitor",
     resource_deps = ["eth-devnet"],
@@ -485,11 +484,8 @@ k8s_resource(
 )
 
 # transfer-verifier -- integration test
-
-
 k8s_resource(
     "tx-verifier-test",
-    # resource_deps = ["tx-verifier-with-monitor"],
     labels = ["evm", "tx-verifier"],
     trigger_mode = trigger_mode,
 )
