@@ -32,13 +32,22 @@ func extractFromJsonPath[T any](data json.RawMessage, path string) (T, error) {
 		if obj[key] == nil {
 			return defaultT, fmt.Errorf("key %s not found", key)
 		}
-		obj = obj[key].(map[string]interface{})
+
+		if v, ok := obj[key].(map[string]interface{}); ok {
+			obj = v
+		} else {
+			return defaultT, fmt.Errorf("can't convert to key to map[string]interface{} type")
+		}
 	}
 
 	// If the final key exists in the object, return the value as T. Otherwise,
 	// return an error.
 	if value, exists := obj[keys[len(keys)-1]]; exists {
-		return value.(T), nil
+		if v, ok := value.(T); ok {
+			return v, nil
+		} else {
+			return defaultT, fmt.Errorf("can't convert to type T")
+		}
 	} else {
 		return defaultT, fmt.Errorf("key %s not found", keys[len(keys)-1])
 	}

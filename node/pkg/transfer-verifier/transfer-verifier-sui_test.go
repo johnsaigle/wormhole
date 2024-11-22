@@ -111,7 +111,11 @@ func TestNewSuiApiConnection(t *testing.T) {
 	sampleUrl := "http://localhost:8080"
 
 	api := NewSuiApiConnection(sampleUrl)
-	assert.Equal(t, sampleUrl, api.(*SuiApiConnection).rpc)
+	if rpc, ok := api.(*SuiApiConnection); ok {
+		assert.Equal(t, sampleUrl, rpc.rpc)
+	} else {
+		t.Errorf("Unable to get RPC from SuiApiConnection")
+	}
 }
 
 func TestProcessEvents(t *testing.T) {
@@ -687,7 +691,7 @@ func TestProcessObjectUpdates(t *testing.T) {
 			}
 
 			// Run function and check results
-			transferredIntoBridge, numEventsProcessed, _ := suiTxVerifier.processObjectUpdates(tt.objectChanges, connection, logger)
+			transferredIntoBridge, numEventsProcessed := suiTxVerifier.processObjectUpdates(tt.objectChanges, connection, logger)
 			assert.Equal(t, tt.expectedResult, transferredIntoBridge)
 			assert.Equal(t, tt.expectedCount, numEventsProcessed)
 		})

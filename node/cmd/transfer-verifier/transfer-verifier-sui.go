@@ -106,7 +106,10 @@ func runTransferVerifierSui(cmd *cobra.Command, args []string) {
 		logger.Info("Processing initial events")
 		for _, event := range initialEvents {
 			if event.ID.TxDigest != nil {
-				suiTransferVerifier.ProcessDigest(*event.ID.TxDigest, suiApiConnection, logger)
+				_, err = suiTransferVerifier.ProcessDigest(*event.ID.TxDigest, suiApiConnection, logger)
+				if err != nil {
+					logger.Error(err.Error())
+				}
 			}
 		}
 	}
@@ -152,7 +155,10 @@ func runTransferVerifierSui(cmd *cobra.Command, args []string) {
 			}
 
 			for _, txDigest := range txDigests {
-				suiTransferVerifier.ProcessDigest(txDigest, suiApiConnection, logger)
+				_, err := suiTransferVerifier.ProcessDigest(txDigest, suiApiConnection, logger)
+				if err != nil {
+					logger.Error(err.Error())
+				}
 			}
 
 			logger.Info("New events processed", zap.Int("latestTimestamp", latestTimestamp), zap.Int("txDigestCount", len(txDigests)))

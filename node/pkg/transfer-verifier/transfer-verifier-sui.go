@@ -105,7 +105,7 @@ func (s *SuiTransferVerifier) processEvents(events []SuiEvent, logger *zap.Logge
 	return requestedOutOfBridge, numEventsProcessed
 }
 
-func (s *SuiTransferVerifier) processObjectUpdates(objectChanges []ObjectChange, suiApiConnection SuiApiInterface, logger *zap.Logger) (transferredIntoBridge map[string]*big.Int, numChangesProcessed int, err error) {
+func (s *SuiTransferVerifier) processObjectUpdates(objectChanges []ObjectChange, suiApiConnection SuiApiInterface, logger *zap.Logger) (transferredIntoBridge map[string]*big.Int, numChangesProcessed int) {
 	transferredIntoBridge = make(map[string]*big.Int)
 
 	for _, objectChange := range objectChanges {
@@ -161,7 +161,7 @@ func (s *SuiTransferVerifier) processObjectUpdates(objectChanges []ObjectChange,
 		numChangesProcessed++
 	}
 
-	return transferredIntoBridge, numChangesProcessed, nil
+	return transferredIntoBridge, numChangesProcessed
 }
 
 func (s *SuiTransferVerifier) ProcessDigest(digest string, suiApiConnection SuiApiInterface, logger *zap.Logger) (uint, error) {
@@ -176,11 +176,7 @@ func (s *SuiTransferVerifier) ProcessDigest(digest string, suiApiConnection SuiA
 	requestedOutOfBridge, numEventsProcessed := s.processEvents(txBlock.Result.Events, logger)
 
 	// process all object changes, indicating funds that are entering the chain
-	transferredIntoBridge, numChangesProcessed, err := s.processObjectUpdates(txBlock.Result.ObjectChanges, suiApiConnection, logger)
-
-	if err != nil {
-		logger.Fatal("Error in processing object changes", zap.Error(err))
-	}
+	transferredIntoBridge, numChangesProcessed := s.processObjectUpdates(txBlock.Result.ObjectChanges, suiApiConnection, logger)
 
 	// TODO: Using `Warn` for testing purposes. Update to Fatal? when ready to go into PR.
 	// TODO: Revisit error handling here.
@@ -224,6 +220,7 @@ func suiApiRequest[T SuiApiResponse](rpc string, method string, params string) (
 	// Create the request
 	requestBody := fmt.Sprintf(`{"jsonrpc":"2.0", "id": 1, "method": "%s", "params": %s}`, method, params)
 
+	//nolint:noctx
 	req, err := http.NewRequest("POST", rpc, strings.NewReader(requestBody))
 	if err != nil {
 		return defaultT, fmt.Errorf("cannot create request: %w", err)

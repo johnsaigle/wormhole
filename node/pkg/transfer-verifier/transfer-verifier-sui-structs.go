@@ -354,7 +354,11 @@ func (r SuiTryMultiGetPastObjectsResult) GetTokenAddress() (tokenAddress string,
 	addrBytes := make([]byte, len(data))
 
 	for i, v := range data {
-		addrBytes[i] = byte(v.(float64))
+		if f, ok := v.(float64); ok {
+			addrBytes[i] = byte(f)
+		} else {
+			return "", fmt.Errorf("error in converting token data to float type")
+		}
 	}
 
 	return hex.EncodeToString(addrBytes), nil
