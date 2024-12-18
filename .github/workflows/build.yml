@@ -387,11 +387,20 @@ jobs:
       - name: Run unit tests
         run: cargo test ${{ matrix.manifest.args }} --manifest-path ${{ matrix.manifest.path }}
 
+  solidity-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: node ./ethereum/lint/lint.js
+
   docker:
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
       - run: chmod 755 ./scripts/check-docker-pin.sh
       - run: ./scripts/check-docker-pin.sh
   npm-packages:

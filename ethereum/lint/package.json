@@ -1,0 +1,17 @@
+{
+  "name": "solidity-syntax-checker",
+  "version": "0.0.1",
+  "main": "lint.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@solidity-parser/parser": "0.19.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2"
+  }
+}
