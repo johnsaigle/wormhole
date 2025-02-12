@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -129,6 +130,275 @@ func TestVerifyShimSetup(t *testing.T) {
 	assert.True(t, s.shimEnabled)
 	assert.Equal(t, shimPostMessageDiscriminatorStr, hex.EncodeToString(s.shimPostMessageDiscriminator))
 	assert.Equal(t, shimMessageEventDiscriminatorStr, hex.EncodeToString(s.shimMessageEventDiscriminator))
+}
+
+// testContext holds all the common test state
+type testContext struct {
+	t                *testing.T
+	logger           *zap.Logger
+	msgC             chan *common.MessagePublication
+	s                *SolanaWatcher
+	whProgramIndex   uint16
+	shimProgramIndex uint16
+	shimFound        bool
+	alreadyProcessed ShimAlreadyProcessed
+}
+
+// setupTest initializes a new test context with all required dependencies
+func setupTest(t *testing.T, tx *solana.Transaction) *testContext {
+	t.Helper() // Marks this as a test helper function for better error reporting
+
+	// Ensure tx is not nil
+	if tx == nil {
+		t.Fatal("setupTest: transaction cannot be nil")
+	}
+
+	ctx := &testContext{
+		t:      t,
+		logger: zap.NewNop(),
+		msgC:   make(chan *common.MessagePublication, 10),
+	}
+
+	// Initialize the watcher
+	ctx.s = shimNewWatcherForTest(t, ctx.msgC)
+	require.True(t, ctx.s.shimEnabled)
+
+	// Find program indices
+	found := false
+	for n, key := range tx.Message.AccountKeys {
+		if len(key) == 0 {
+			t.Fatal("setupTest: encountered empty account key")
+		}
+
+		if key.Equals(ctx.s.contract) {
+			ctx.whProgramIndex = uint16(n)
+		}
+		if key.Equals(ctx.s.shimContractAddr) {
+			ctx.shimProgramIndex = uint16(n)
+			found = true
+		}
+	}
+
+	ctx.shimFound = found
+
+	// Validate expected values
+	require.Equal(t, uint16(10), ctx.whProgramIndex)
+	require.True(t, ctx.shimFound)
+	require.Equal(t, uint16(6), ctx.shimProgramIndex)
+
+	ctx.alreadyProcessed = ShimAlreadyProcessed{}
+
+
+	return ctx
+}
+
+func parseJson(t *testing.T, eventJson string, messageInstructionsLength int, metaInnerInstructionsLength int) (
+	tx *solana.Transaction,
+	txRpc *rpc.TransactionWithMeta,
+) {
+	t.Helper() // Marks this as a test helper function for better error reporting
+
+	err := json.Unmarshal([]byte(eventJson), &txRpc)
+	require.NoError(t, err)
+
+	tx, err = txRpc.GetParsedTransaction()
+	require.NoError(t, err)
+
+	require.Equal(t, messageInstructionsLength, len(tx.Message.Instructions))
+	require.Equal(t, metaInnerInstructionsLength, len(txRpc.Meta.InnerInstructions))
+	return
+}
+
+// TestShimDirectWrongOrder ensures that the code throws an error if the Shim Post Message event does not follow a Wormhole Post Message Unreliable event.
+func TestShimDirectErrorWrongEventOrder(t *testing.T) {
+	// The meta.innerInstructions[0].instructions have been swapped, making this transaction invalid.
+	eventJson := `
+	{
+		"meta": {
+			"innerInstructions": [
+				{
+					"index": 1,
+					"instructions": [
+						{
+							"accounts": [7],
+							"data": "hTEY7jEqBPdDRkTWweeDPgyCUykRXEQVCUwrYmn4HZo84DdQrTJT2nBMiJFB3jXUVxHVd9mGq7BX9htuAN",
+							"programIdIndex": 6,
+							"stackHeight": 2
+						},
+						{
+							"accounts": [1, 3, 0, 4, 0, 2, 8, 5, 9],
+							"data": "TbyPDfUoyRxsr",
+							"programIdIndex": 10,
+							"stackHeight": 2
+						}
+					]
+				}
+			]
+		},
+		"transaction": {
+			"message": {
+				"accountKeys": [
+					"H3kCPjpQDT4hgwWHr9E9pC99rZT2yHAwiwSwku6Bne9",
+					"2yVjuQwpsvdsrywzsJJVs9Ueh4zayyo5DYJbBNc3DDpn",
+					"9bFNrXNb2WTx8fMHXCheaZqkLZ3YCCaiqTftHxeintHy",
+					"9vohBn118ZEctRmuTRvoUZg1B1HGfSH8C5QX6twtUFrJ",
+					"HeccUHmoyMi5S6nuTcyUBh4w4me3FP541a52ErYJRT8a",
+					"11111111111111111111111111111111",
+					"EtZMZM22ViKMo4r5y4Anovs3wKQ2owUmDpjygnMMcdEX",
+					"HQS31aApX3DDkuXgSpV9XyDUNtFgQ31pUn5BNWHG2PSp",
+					"SysvarC1ock11111111111111111111111111111111",
+					"SysvarRent111111111111111111111111111111111",
+					"worm2ZoG2kUd4vFXhvjh93UUH596ayRfgQ2MgjNMTth"
+				],
+				"instructions": [
+					{
+						"accounts": [0, 2],
+						"data": "3Bxs4HanWsHUZCbH",
+						"programIdIndex": 5,
+						"stackHeight": null
+					},
+					{
+						"accounts": [1, 3, 0, 4, 0, 2, 8, 5, 9, 10, 7, 6],
+						"data": "3Cn8VBJReY7Bku3RduhBfYpk7tiw1R6pKcTWv9R",
+						"programIdIndex": 6,
+						"stackHeight": null
+					}
+				]
+			}
+		}
+	}
+	`
+
+	// The JSON event has been modified to simulate malicious transactions. It may not be complete with respect to
+	// an actual Solana transaction log, and it may not be possible to generate this event in practice.
+	// It has been minimized to retain only the relevant code while still being parsed by Solana-Go.
+	// A bunch of checks to verify we parsed the JSON correctly. Required for this adversarial test because the JSON
+	// has been intentionally mangled.
+	instructionLength := 2
+	metaInnerInstructionsLength := 1
+	tx, txRpc := parseJson(
+		t,
+		eventJson,
+		instructionLength,
+		metaInnerInstructionsLength,
+	)
+
+	ctx := setupTest(t, tx)
+	
+	found, err := ctx.s.shimProcessTopLevelInstruction(
+		ctx.logger,
+		ctx.whProgramIndex,
+		ctx.shimProgramIndex,
+		tx,
+		txRpc.Meta.InnerInstructions,
+		1, // The JSON offset containing the Shim Post Message Event. (We're looking at the second transaction.)
+		ctx.alreadyProcessed,
+		false,
+	)
+	require.ErrorContains(t, err, "detected an inner shim message event instruction before the core event for shim instruction")
+	require.False(t, found)
+	require.Equal(t, 0, len(ctx.s.msgC))
+	// The transaction is not inserted into the set in this case.
+	require.Zero(t, len(ctx.alreadyProcessed))
+}
+
+
+func TestShimDirectErrorShimEventInWrongInstruction(t *testing.T) {
+	// The two events (PostMessage and ShimEvent) must occur in the same meta.innerInstructions array element.
+	// This JSON places them separately at meta.innerInstructions[0] and meta.innerInstructions[1].
+	eventJson := `
+	{
+		"meta": {
+			"innerInstructions": [
+				{
+					"index": 1,
+					"instructions": [
+						{
+							"accounts": [1, 3, 0, 4, 0, 2, 8, 5, 9],
+							"data": "TbyPDfUoyRxsr",
+							"programIdIndex": 10,
+							"stackHeight": 2
+						}
+					]
+				},
+				{
+					"index": 2,
+					"instructions": [
+						{
+							"accounts": [7],
+							"data": "hTEY7jEqBPdDRkTWweeDPgyCUykRXEQVCUwrYmn4HZo84DdQrTJT2nBMiJFB3jXUVxHVd9mGq7BX9htuAN",
+							"programIdIndex": 6,
+							"stackHeight": 2
+						}
+					]
+				}
+			]
+		},
+		"transaction": {
+			"message": {
+				"accountKeys": [
+					"H3kCPjpQDT4hgwWHr9E9pC99rZT2yHAwiwSwku6Bne9",
+					"2yVjuQwpsvdsrywzsJJVs9Ueh4zayyo5DYJbBNc3DDpn",
+					"9bFNrXNb2WTx8fMHXCheaZqkLZ3YCCaiqTftHxeintHy",
+					"9vohBn118ZEctRmuTRvoUZg1B1HGfSH8C5QX6twtUFrJ",
+					"HeccUHmoyMi5S6nuTcyUBh4w4me3FP541a52ErYJRT8a",
+					"11111111111111111111111111111111",
+					"EtZMZM22ViKMo4r5y4Anovs3wKQ2owUmDpjygnMMcdEX",
+					"HQS31aApX3DDkuXgSpV9XyDUNtFgQ31pUn5BNWHG2PSp",
+					"SysvarC1ock11111111111111111111111111111111",
+					"SysvarRent111111111111111111111111111111111",
+					"worm2ZoG2kUd4vFXhvjh93UUH596ayRfgQ2MgjNMTth"
+				],
+				"instructions": [
+					{
+						"accounts": [0, 2],
+						"data": "3Bxs4HanWsHUZCbH",
+						"programIdIndex": 5,
+						"stackHeight": null
+					},
+					{
+						"accounts": [1, 3, 0, 4, 0, 2, 8, 5, 9, 10, 7, 6],
+						"data": "3Cn8VBJReY7Bku3RduhBfYpk7tiw1R6pKcTWv9R",
+						"programIdIndex": 6,
+						"stackHeight": null
+					}
+				]
+			}
+		}
+	}
+	`
+
+	// The JSON event has been modified to simulate malicious transactions. It may not be complete with respect to
+	// an actual Solana transaction log, and it may not be possible to generate this event in practice.
+	// It has been minimized to retain only the relevant code while still being parsed by Solana-Go.
+	// A bunch of checks to verify we parsed the JSON correctly. Required for this adversarial test because the JSON
+	// has been intentionally mangled.
+	instructionLength := 2
+	metaInnerInstructionsLength := 2
+	tx, txRpc := parseJson(
+		t,
+		eventJson,
+		instructionLength,
+		metaInnerInstructionsLength,
+	)
+
+	ctx := setupTest(t, tx)
+	
+	found, err := ctx.s.shimProcessTopLevelInstruction(
+		ctx.logger,
+		ctx.whProgramIndex,
+		ctx.shimProgramIndex,
+		tx,
+		txRpc.Meta.InnerInstructions,
+		1, // The JSON offset containing the Shim Post Message Event. (We're looking at the second transaction.)
+		ctx.alreadyProcessed,
+		false,
+	)
+	require.ErrorContains(t, err, "failed to find inner shim message event instruction for shim instruction")
+	require.False(t, found)
+	require.Equal(t, 0, len(ctx.s.msgC))
+	// The top-level instruction was processed in the error case, but not any of the inner instructions.
+	require.Equal(t, 1, len(ctx.alreadyProcessed))
 }
 
 func TestShimDirect(t *testing.T) {
@@ -326,6 +596,7 @@ func TestShimDirect(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, 1, len(s.msgC))
+	require.True(t, len(alreadyProcessed) > 0)
 
 	msg := <-msgC
 	require.NotNil(t, msg)
@@ -499,7 +770,16 @@ func TestShimFromIntegrator(t *testing.T) {
 	require.Equal(t, uint16(7), shimProgramIndex)
 
 	alreadyProcessed := ShimAlreadyProcessed{}
-	found, err := s.shimProcessInnerInstruction(logger, whProgramIndex, shimProgramIndex, tx, txRpc.Meta.InnerInstructions[0].Instructions, 0, 0, alreadyProcessed, false)
+	outerIdx := 0
+	innerIdx := 0
+	require.Equal(t, 0, len(alreadyProcessed))
+	require.False(t, alreadyProcessed.exists(outerIdx, innerIdx))
+	found, err := s.shimProcessInnerInstruction(logger, whProgramIndex, shimProgramIndex, tx, txRpc.Meta.InnerInstructions[0].Instructions, outerIdx, innerIdx, alreadyProcessed, false)
+	require.True(t, alreadyProcessed.exists(outerIdx, innerIdx))
+	for k, v := range alreadyProcessed {
+		fmt.Printf("%d %s\n", k, v)
+	}
+	require.True(t, len(alreadyProcessed) > 0)
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, 1, len(s.msgC))
