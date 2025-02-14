@@ -1847,3 +1847,89 @@ func TestShimDirectErrorPostMessageWithoutShimEvent(t *testing.T) {
 	// The top-level instruction should be processed because we detected the shim instruction.
 	require.Equal(t, 1, len(ctx.alreadyProcessed))
 }
+
+// TestShimShouldNotPanicOnEmptyInput ensures that empty input values are ignored and that they don't cause panics.
+// TODO: Currently this test case fails.
+func TestShimShouldNotPanicOnEmptyInput(t *testing.T) {
+	// Create a mangled JSON response that contains no outer instructions and no inner instructions.
+	eventJson := `
+	{
+		"meta": {
+			"innerInstructions": []
+		},
+		"transaction": {
+			"message": {
+				"accountKeys": [
+					"H3kCPjpQDT4hgwWHr9E9pC99rZT2yHAwiwSwku6Bne9",
+					"2yVjuQwpsvdsrywzsJJVs9Ueh4zayyo5DYJbBNc3DDpn",
+					"9bFNrXNb2WTx8fMHXCheaZqkLZ3YCCaiqTftHxeintHy",
+					"9vohBn118ZEctRmuTRvoUZg1B1HGfSH8C5QX6twtUFrJ",
+					"HeccUHmoyMi5S6nuTcyUBh4w4me3FP541a52ErYJRT8a",
+					"11111111111111111111111111111111",
+					"EtZMZM22ViKMo4r5y4Anovs3wKQ2owUmDpjygnMMcdEX",
+					"HQS31aApX3DDkuXgSpV9XyDUNtFgQ31pUn5BNWHG2PSp",
+					"SysvarC1ock11111111111111111111111111111111",
+					"SysvarRent111111111111111111111111111111111",
+					"worm2ZoG2kUd4vFXhvjh93UUH596ayRfgQ2MgjNMTth"
+				],
+				"instructions": []
+			},
+			"signatures": [
+				"3NACxoZLehbdKGjTWZKTTXJPuovyqAih1AD1BrkYj8nzDAtjiQUEaNmhkoU1jcFfoPTAjrvnaLFgTafNWr3fBrdB"
+			]
+		}
+	}
+	`
+
+	instructionLength := 0
+	metaInnerInstructionsLength := 0
+	signaturesLength := 1
+
+	// parseJson asserts that both the outer and inner instructions will have 0 length.
+	tx, _ := parseJson(
+		t,
+		eventJson,
+		instructionLength,
+		metaInnerInstructionsLength,
+		signaturesLength,
+	)
+
+	// Creates an empty watcher, verifies the program indices, etc.
+	ctx := setupTest(t, tx)
+
+	ctx.s.shimProcessTopLevelInstruction(
+		ctx.logger,
+		ctx.whProgramIndex,
+		ctx.shimProgramIndex,
+		nil,
+		[]rpc.InnerInstruction{},
+		0,
+		ctx.alreadyProcessed,
+		false,
+	)
+
+	ctx.s.shimProcessInnerInstruction(
+		ctx.logger,
+		ctx.whProgramIndex,
+		ctx.shimProgramIndex,
+		tx,
+		[]solana.CompiledInstruction{},
+		0,
+		0,
+		ctx.alreadyProcessed,
+		false,
+	)
+
+	ctx.s.shimProcessRest(
+		ctx.logger,
+		ctx.whProgramIndex,
+		ctx.shimProgramIndex,
+		tx,
+		[]solana.CompiledInstruction{},
+		0,
+		0,
+		&ShimPostMessageData{},
+		ctx.alreadyProcessed,
+		false,
+	)
+}
