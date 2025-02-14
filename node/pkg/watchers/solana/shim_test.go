@@ -1897,39 +1897,46 @@ func TestShimShouldNotPanicOnEmptyInput(t *testing.T) {
 	// Creates an empty watcher, verifies the program indices, etc.
 	ctx := setupTest(t, tx)
 
-	ctx.s.shimProcessTopLevelInstruction(
-		ctx.logger,
-		ctx.whProgramIndex,
-		ctx.shimProgramIndex,
-		nil,
-		[]rpc.InnerInstruction{},
-		0,
-		ctx.alreadyProcessed,
-		false,
-	)
+	require.NotPanics(t, func() {
+		ctx.s.shimProcessTopLevelInstruction(
+			ctx.logger,
+			ctx.whProgramIndex,
+			ctx.shimProgramIndex,
+			nil,
+			[]rpc.InnerInstruction{},
+			0,
+			ctx.alreadyProcessed,
+			false,
+		)
+	}, "shimProcessTopLevelInstruction should not panic on empty input")
 
-	ctx.s.shimProcessInnerInstruction(
-		ctx.logger,
-		ctx.whProgramIndex,
-		ctx.shimProgramIndex,
-		tx,
-		[]solana.CompiledInstruction{},
-		0,
-		0,
-		ctx.alreadyProcessed,
-		false,
-	)
+	require.NotPanics(t, func() {
+		ctx.s.shimProcessInnerInstruction(
+			ctx.logger,
+			ctx.whProgramIndex,
+			ctx.shimProgramIndex,
+			tx,
+			[]solana.CompiledInstruction{},
+			0,
+			0,
+			ctx.alreadyProcessed,
+			false,
+		)
+	}, "shimProcessInnerInstructions should not panic on empty input")
 
-	ctx.s.shimProcessRest(
-		ctx.logger,
-		ctx.whProgramIndex,
-		ctx.shimProgramIndex,
-		tx,
-		[]solana.CompiledInstruction{},
-		0,
-		0,
-		&ShimPostMessageData{},
-		ctx.alreadyProcessed,
-		false,
-	)
+	require.NotPanics(t, func() {
+		ctx.s.shimProcessRest(
+			ctx.logger,
+			ctx.whProgramIndex,
+			ctx.shimProgramIndex,
+			tx,
+			[]solana.CompiledInstruction{},
+			0,
+			0,
+			&ShimPostMessageData{},
+			ctx.alreadyProcessed,
+			false,
+		)
+	}, "shimProcessRest should not panic on empty input")
+
 }
