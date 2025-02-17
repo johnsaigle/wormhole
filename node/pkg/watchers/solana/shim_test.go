@@ -1282,13 +1282,21 @@ func TestShimDirectErrorPostMessageReliable(t *testing.T) {
 		false,
 	)
 
-	require.ErrorContains(t, err, "failed to find inner core instruction for shim instruction")
-	require.False(t, found)
-	require.Equal(t, 0, len(ctx.s.msgC))
-	// We processed the top-level transaction for the Shim transaction as well as the inner instruction for the shim event.
-	require.Equal(t, 2, len(ctx.alreadyProcessed))
+	ctx.checkInvariantsAfter(
+		t,
+		false,
+		found,
+		err,
+		"failed to find inner core instruction for shim instruction",
+	)
+
 }
 
+// TestShimDirectMessageEventIndirect checks a logic issue where an inner instruction set contains first a Post Message
+// Reliable message from the Core bridge, followed by a Shim Event, and finally a Post Message Unreliable event.
+// In one iteration of the Shim code, this type of sequence caused a bug:  the sequence should result in an error, but instead the message was
+// processed by the Guardian.
+// TODO: The bug mentioned above needs to be fixed. Currently, this test fails.
 func TestShimDirectMessageEventIndirect(t *testing.T) {
 	// This JSON represents a transaction where the Post Message data contains a call to Post Message Reliable instead
 	// of Post Message Unreliable.
@@ -1374,9 +1382,9 @@ func TestShimDirectMessageEventIndirect(t *testing.T) {
 		signaturesLength,
 	)
 
-	ctx := setupTest(t, tx)
+	ctx := setupTest(t, Direct, tx)
 
-	found, _ := ctx.s.shimProcessTopLevelInstruction(
+	found, err := ctx.s.shimProcessTopLevelInstruction(
 		ctx.logger,
 		ctx.whProgramIndex,
 		ctx.shimProgramIndex,
@@ -1387,8 +1395,8 @@ func TestShimDirectMessageEventIndirect(t *testing.T) {
 		false,
 	)
 
-	//require.ErrorContains(t, err, "failed to find inner core instruction for shim instruction")
-	require.True(t, found)
+	require.ErrorContains(t, err, "failed to find inner core instruction for shim instruction")
+	require.False(t, found)
 	require.Equal(t, 1, len(ctx.s.msgC))
 	// We processed the top-level transaction for the Shim transaction as well as the inner instruction for the shim event.
 	require.Equal(t, 3, len(ctx.alreadyProcessed))
