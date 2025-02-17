@@ -1237,6 +1237,111 @@ func TestShimDirectErrorPostMessageReliable(t *testing.T) {
 	require.Equal(t, 2, len(ctx.alreadyProcessed))
 }
 
+func TestShimDirectMessageEventIndirect(t *testing.T) {
+	// This JSON represents a transaction where the Post Message data contains a call to Post Message Reliable instead
+	// of Post Message Unreliable.
+	// The change was made as follows:
+	// - Base58 decode valid test data "TbyPDfUoyRxsr" to hex `082a0000000000000001`
+	// - Note that the first byte `08` corresponds to the postMessageUnreliableInstructionID as defined in the Solana client.
+	// - Change to postMessageInstructionID `01`: `012a0000000000000001`
+	// - Base 58 encode to get the result: 4o1AAQkKMUkzL
+	eventJson := `
+	{
+		"meta": {
+			"innerInstructions": [
+				{
+					"index": 1,
+					"instructions": [
+						{
+							"accounts": [1, 3, 0, 4, 0, 2, 8, 5, 9],
+							"data": "4o1AAQkKMUkzL",
+							"programIdIndex": 10,
+							"stackHeight": 2
+						},
+						{
+							"accounts": [7],
+							"data": "hTEY7jEqBPdDRkTWweeDPgyCUykRXEQVCUwrYmn4HZo84DdQrTJT2nBMiJFB3jXUVxHVd9mGq7BX9htuAN",
+							"programIdIndex": 6,
+							"stackHeight": 2
+						},
+						{
+							"accounts": [1, 3, 0, 4, 0, 2, 8, 5, 9],
+							"data": "TbyPDfUoyRxsr",
+							"programIdIndex": 10,
+							"stackHeight": 2
+						}
+					]
+				}
+			]
+		},
+		"transaction": {
+			"message": {
+				"accountKeys": [
+					"H3kCPjpQDT4hgwWHr9E9pC99rZT2yHAwiwSwku6Bne9",
+					"2yVjuQwpsvdsrywzsJJVs9Ueh4zayyo5DYJbBNc3DDpn",
+					"9bFNrXNb2WTx8fMHXCheaZqkLZ3YCCaiqTftHxeintHy",
+					"9vohBn118ZEctRmuTRvoUZg1B1HGfSH8C5QX6twtUFrJ",
+					"HeccUHmoyMi5S6nuTcyUBh4w4me3FP541a52ErYJRT8a",
+					"11111111111111111111111111111111",
+					"EtZMZM22ViKMo4r5y4Anovs3wKQ2owUmDpjygnMMcdEX",
+					"HQS31aApX3DDkuXgSpV9XyDUNtFgQ31pUn5BNWHG2PSp",
+					"SysvarC1ock11111111111111111111111111111111",
+					"SysvarRent111111111111111111111111111111111",
+					"worm2ZoG2kUd4vFXhvjh93UUH596ayRfgQ2MgjNMTth"
+				],
+				"instructions": [
+					{
+						"accounts": [0, 2],
+						"data": "3Bxs4HanWsHUZCbH",
+						"programIdIndex": 5,
+						"stackHeight": null
+					},
+					{
+						"accounts": [1, 3, 0, 4, 0, 2, 8, 5, 9, 10, 7, 6],
+						"data": "3Cn8VBJReY7Bku3RduhBfYpk7tiw1R6pKcTWv9R",
+						"programIdIndex": 6,
+						"stackHeight": null
+					}
+				]
+			},
+			"signatures": [
+				"3NACxoZLehbdKGjTWZKTTXJPuovyqAih1AD1BrkYj8nzDAtjiQUEaNmhkoU1jcFfoPTAjrvnaLFgTafNWr3fBrdB"
+			]
+		}
+	}
+	`
+
+	instructionLength := 2
+	metaInnerInstructionsLength := 1
+	signaturesLength := 1
+	tx, txRpc := parseJson(
+		t,
+		eventJson,
+		instructionLength,
+		metaInnerInstructionsLength,
+		signaturesLength,
+	)
+
+	ctx := setupTest(t, tx)
+
+	found, _ := ctx.s.shimProcessTopLevelInstruction(
+		ctx.logger,
+		ctx.whProgramIndex,
+		ctx.shimProgramIndex,
+		tx,
+		txRpc.Meta.InnerInstructions,
+		1,
+		ctx.alreadyProcessed,
+		false,
+	)
+
+	//require.ErrorContains(t, err, "failed to find inner core instruction for shim instruction")
+	require.True(t, found)
+	require.Equal(t, 1, len(ctx.s.msgC))
+	// We processed the top-level transaction for the Shim transaction as well as the inner instruction for the shim event.
+	require.Equal(t, 3, len(ctx.alreadyProcessed))
+}
+
 // TestShimDirectPostMessageNotFromCore ensures that post messages not originating from the core bridge contract are rejected
 func TestShimDirectErrorPostMessageNotFromCore(t *testing.T) {
 	// This JSON represents a transaction where the Post Message appears to come from a different program
