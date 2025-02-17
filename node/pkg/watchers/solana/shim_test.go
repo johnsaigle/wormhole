@@ -132,17 +132,6 @@ func TestVerifyShimSetup(t *testing.T) {
 	assert.Equal(t, shimMessageEventDiscriminatorStr, hex.EncodeToString(s.shimMessageEventDiscriminator))
 }
 
-// testContext holds all the common test state
-type testContext struct {
-	t                *testing.T
-	logger           *zap.Logger
-	msgC             chan *common.MessagePublication
-	s                *SolanaWatcher
-	whProgramIndex   uint16
-	shimProgramIndex uint16
-	alreadyProcessed ShimAlreadyProcessed
-}
-
 func TestShimDirect(t *testing.T) {
 	eventJson := `
 	{
@@ -1021,8 +1010,58 @@ func TestShimFromIntegratorWithMultipleShimTransactions(t *testing.T) {
 	assert.False(t, msg.Unreliable)
 }
 
+// testContext holds all the common test state
+type (
+	testMode    uint8
+	testContext struct {
+		t                *testing.T
+		logger           *zap.Logger
+		msgC             chan *common.MessagePublication
+		s                *SolanaWatcher
+		whProgramIndex   uint16
+		shimProgramIndex uint16
+		alreadyProcessed ShimAlreadyProcessed
+	}
+)
+
+const (
+	Direct testMode = iota
+	Integrator
+)
+
+// checkInvariantsAfter bundles several checks together. Depending on whether the test succeeded or failed, certain
+// invariants are expected.
+func (tc *testContext) checkInvariantsAfter(
+	t *testing.T,
+	// Whether the test should succeed
+	shouldSucceed bool,
+	// Whether the test succeeded
+	success bool,
+	error error,
+	errString string,
+) {
+	if shouldSucceed && len(errString) > 0 {
+		panic("can only use errString for tests that should fail")
+	}
+	if shouldSucceed {
+		require.True(t, success)
+		require.GreaterOrEqual(t, len(tc.msgC), 1, "message not published to channel in success path")
+		require.GreaterOrEqual(t, len(tc.alreadyProcessed), 1, "alreadyProcessed set empty in success path")
+	} else {
+		// First check for the error string if provided, as this can help determine where precisely the error
+		// should have occurred.
+		if len(errString) > 0 {
+			require.ErrorContains(t, error, errString)
+		} else {
+			require.Error(t, error, "failed test should have error result")
+		}
+		require.False(t, success, "test was expected to fail, but returned true")
+		require.Zero(t, len(tc.msgC), "message published to channel in error path")
+	}
+}
+
 // setupTest initializes a new test context with all required dependencies needed for simulating Shim instructions.
-func setupTest(t *testing.T, tx *solana.Transaction) *testContext {
+func setupTest(t *testing.T, mode testMode, tx *solana.Transaction) *testContext {
 	t.Helper() // Marks this as a test helper function for better error reporting
 
 	// Ensure tx is not nil
@@ -1065,9 +1104,22 @@ func setupTest(t *testing.T, tx *solana.Transaction) *testContext {
 		),
 	)
 
+	// These values are taken from the example JSON used in the basic, happy-path tests for the direct and integrator
+	// shim test cases. Keeping the same elements and ordering for accountKeys allows authors of unit tests
+	// to quickly copy and modify the JSON code.
+	exptectedWhIndex := uint16(10)
+	expectedShimIndex := uint16(6)
+	switch mode {
+	case Integrator:
+		exptectedWhIndex = uint16(12)
+		expectedShimIndex = uint16(7)
+	case Direct:
+	default:
+	}
+
 	require.Equal(
 		t,
-		uint16(10),
+		exptectedWhIndex,
 		ctx.whProgramIndex,
 		fmt.Sprintf(
 			"wormhole program account key %s should be at index 10",
@@ -1076,7 +1128,7 @@ func setupTest(t *testing.T, tx *solana.Transaction) *testContext {
 	)
 	require.Equal(
 		t,
-		uint16(6),
+		expectedShimIndex,
 		ctx.shimProgramIndex,
 		fmt.Sprintf(
 			"shim program account key %s should be at index 6",
@@ -1217,7 +1269,7 @@ func TestShimDirectErrorPostMessageReliable(t *testing.T) {
 		signaturesLength,
 	)
 
-	ctx := setupTest(t, tx)
+	ctx := setupTest(t, Direct, tx)
 
 	found, err := ctx.s.shimProcessTopLevelInstruction(
 		ctx.logger,
@@ -1417,7 +1469,7 @@ func TestShimDirectErrorPostMessageNotFromCore(t *testing.T) {
 		signaturesLength,
 	)
 
-	ctx := setupTest(t, tx)
+	ctx := setupTest(t, Direct, tx)
 
 	found, err := ctx.s.shimProcessTopLevelInstruction(
 		ctx.logger,
@@ -1512,7 +1564,7 @@ func TestShimDirectErrorWrongEventOrder(t *testing.T) {
 		signaturesLength,
 	)
 
-	ctx := setupTest(t, tx)
+	ctx := setupTest(t, Direct, tx)
 
 	found, err := ctx.s.shimProcessTopLevelInstruction(
 		ctx.logger,
@@ -1615,7 +1667,7 @@ func TestShimDirectErrorShimEventInWrongInstruction(t *testing.T) {
 		signaturesLength,
 	)
 
-	ctx := setupTest(t, tx)
+	ctx := setupTest(t, Direct, tx)
 
 	found, err := ctx.s.shimProcessTopLevelInstruction(
 		ctx.logger,
@@ -1720,7 +1772,7 @@ func TestShimDirectErrorMultiplePostMessages(t *testing.T) {
 		signaturesLength,
 	)
 
-	ctx := setupTest(t, tx)
+	ctx := setupTest(t, Direct, tx)
 
 	found, err := ctx.s.shimProcessTopLevelInstruction(
 		ctx.logger,
@@ -1842,7 +1894,7 @@ func TestShimDirectErrorMultipleShimEvents(t *testing.T) {
 		signaturesLength,
 	)
 
-	ctx := setupTest(t, tx)
+	ctx := setupTest(t, Direct, tx)
 
 	found, err := ctx.s.shimProcessTopLevelInstruction(
 		ctx.logger,
@@ -1933,7 +1985,7 @@ func TestShimDirectErrorPostMessageWithoutShimEvent(t *testing.T) {
 		signaturesLength,
 	)
 
-	ctx := setupTest(t, tx)
+	ctx := setupTest(t, Direct, tx)
 
 	found, err := ctx.s.shimProcessTopLevelInstruction(
 		ctx.logger,
@@ -2000,7 +2052,7 @@ func TestShimShouldNotPanicOnEmptyInput(t *testing.T) {
 	)
 
 	// Creates an empty watcher, verifies the program indices, etc.
-	ctx := setupTest(t, tx)
+	ctx := setupTest(t, Direct, tx)
 
 	require.NotPanics(t, func() {
 		ctx.s.shimProcessTopLevelInstruction(
@@ -2044,4 +2096,129 @@ func TestShimShouldNotPanicOnEmptyInput(t *testing.T) {
 		)
 	}, "shimProcessRest should not panic on empty input")
 
+}
+
+func TestShimIntegratorErrorWrongOrder(t *testing.T) {
+	// Modified from the TestShimFromIntegrator JSON: the order of the Post Message Unreliable Event and the Shim Event
+	// are swapped which should cause an error, because the Shim Event must always occur after.
+	eventJson := `
+	{
+		"meta": {
+			"innerInstructions": [
+				{
+					"index": 1,
+					"instructions": [
+						{
+							"accounts": [1, 4, 11, 3, 0, 2, 9, 5, 10, 12, 8, 7],
+							"data": "BeHixXyfSZ8dzFJzxTYRV18L6KSgTuqcTjaqeXgDVbXHC7mCjAgSyhz",
+							"programIdIndex": 7,
+							"stackHeight": 2
+						},
+						{
+							"accounts": [8],
+							"data": "hTEY7jEqBPdDRkTWweeDPgzBpsiybJCHnVTVt8aCDem8p58yeQcQLJWk7hgGHrX79qZyKmCM89vCgPY7SE",
+							"programIdIndex": 7,
+							"stackHeight": 3
+						},
+						{
+							"accounts": [1, 4, 11, 3, 0, 2, 9, 5, 10],
+							"data": "T4xyMHqZi66JU",
+							"programIdIndex": 12,
+							"stackHeight": 3
+						}
+					]
+				}
+			],
+			"logMessages": [
+				"Program 11111111111111111111111111111111 invoke [1]",
+				"Program 11111111111111111111111111111111 success",
+				"Program AEwubmehHNvkMXoH2C5MgDSemZgQ3HUSYpeaF3UrNZdQ invoke [1]",
+				"Program log: Instruction: PostMessage",
+				"Program EtZMZM22ViKMo4r5y4Anovs3wKQ2owUmDpjygnMMcdEX invoke [2]",
+				"Program log: Instruction: PostMessage",
+				"Program worm2ZoG2kUd4vFXhvjh93UUH596ayRfgQ2MgjNMTth invoke [3]",
+				"Program log: Sequence: 1",
+				"Program worm2ZoG2kUd4vFXhvjh93UUH596ayRfgQ2MgjNMTth consumed 18679 of 375180 compute units",
+				"Program worm2ZoG2kUd4vFXhvjh93UUH596ayRfgQ2MgjNMTth success",
+				"Program EtZMZM22ViKMo4r5y4Anovs3wKQ2owUmDpjygnMMcdEX invoke [3]",
+				"Program EtZMZM22ViKMo4r5y4Anovs3wKQ2owUmDpjygnMMcdEX consumed 2000 of 353964 compute units",
+				"Program EtZMZM22ViKMo4r5y4Anovs3wKQ2owUmDpjygnMMcdEX success",
+				"Program EtZMZM22ViKMo4r5y4Anovs3wKQ2owUmDpjygnMMcdEX consumed 33649 of 385286 compute units",
+				"Program EtZMZM22ViKMo4r5y4Anovs3wKQ2owUmDpjygnMMcdEX success",
+				"Program AEwubmehHNvkMXoH2C5MgDSemZgQ3HUSYpeaF3UrNZdQ consumed 48808 of 399850 compute units",
+				"Program AEwubmehHNvkMXoH2C5MgDSemZgQ3HUSYpeaF3UrNZdQ success"
+			]
+		},
+		"transaction": {
+			"message": {
+				"accountKeys": [
+					"H3kCPjpQDT4hgwWHr9E9pC99rZT2yHAwiwSwku6Bne9",
+					"2yVjuQwpsvdsrywzsJJVs9Ueh4zayyo5DYJbBNc3DDpn",
+					"9bFNrXNb2WTx8fMHXCheaZqkLZ3YCCaiqTftHxeintHy",
+					"G4zDzQLktwvU4rn6A4dSAy9eU76cJxppCaumZhjjhXjv",
+					"GXUAWs1h6Nh1KLByvfeEyig9yn92LmKMjXDNxHGddyXR",
+					"11111111111111111111111111111111",
+					"AEwubmehHNvkMXoH2C5MgDSemZgQ3HUSYpeaF3UrNZdQ",
+					"EtZMZM22ViKMo4r5y4Anovs3wKQ2owUmDpjygnMMcdEX",
+					"HQS31aApX3DDkuXgSpV9XyDUNtFgQ31pUn5BNWHG2PSp",
+					"SysvarC1ock11111111111111111111111111111111",
+					"SysvarRent111111111111111111111111111111111",
+					"UvCifi1D8qj5FSJQdWL3KENnmaZjm62XUMa7NReceer",
+					"worm2ZoG2kUd4vFXhvjh93UUH596ayRfgQ2MgjNMTth"
+				],
+				"instructions": [
+					{
+						"accounts": [0, 2],
+						"data": "3Bxs4HanWsHUZCbH",
+						"programIdIndex": 5,
+						"stackHeight": null
+					},
+					{
+						"accounts": [0, 7, 1, 4, 11, 3, 2, 9, 5, 10, 12, 8],
+						"data": "cpyiD6CEaBD",
+						"programIdIndex": 6,
+						"stackHeight": null
+					}
+				]
+			},
+			"signatures": [
+				"G4jVHcH6F4Np1NRvYC6ridv5jGfPSVGgiEVZrjprpMdBFhJH7eVxUuxsvkDF2rkx4JseUftz3HnWoSomGt3czSY"
+			]
+		}
+	}
+	`
+
+	instructionLength := 2
+	metaInnerInstructionsLength := 1
+	signaturesLength := 1
+	tx, txRpc := parseJson(
+		t,
+		eventJson,
+		instructionLength,
+		metaInnerInstructionsLength,
+		signaturesLength,
+	)
+
+	ctx := setupTest(t, Integrator, tx)
+
+	// All the relevant instructions are within the inner instructions for the integrator case.
+	found, err := ctx.s.shimProcessInnerInstruction(
+		ctx.logger,
+		ctx.whProgramIndex,
+		ctx.shimProgramIndex,
+		tx,
+		txRpc.Meta.InnerInstructions[0].Instructions,
+		0,
+		0,
+		ctx.alreadyProcessed,
+		false,
+	)
+
+	ctx.checkInvariantsAfter(
+		t,
+		false,
+		found,
+		err,
+		"detected an inner shim message event instruction before the core event for shim instruction",
+	)
 }
