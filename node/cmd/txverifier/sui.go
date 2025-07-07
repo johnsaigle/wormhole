@@ -18,6 +18,7 @@ import (
 
 const (
 	INITIAL_EVENT_FETCH_LIMIT = 25
+	SuiTickerInterval         = 5 * time.Second
 )
 
 // CLI args
@@ -155,7 +156,7 @@ func runTransferVerifierSui(cmd *cobra.Command, args []string) {
 	}
 
 	// Ticker for live processing
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(SuiTickerInterval)
 	defer ticker.Stop()
 
 	for {
@@ -164,7 +165,7 @@ func runTransferVerifierSui(cmd *cobra.Command, args []string) {
 			logger.Info("Context cancelled")
 		case <-ticker.C:
 			// Fetch new events
-			resp, err := suiApiConnection.QueryEvents(eventFilter, "null", 25, true)
+			resp, err := suiApiConnection.QueryEvents(eventFilter, "null", INITIAL_EVENT_FETCH_LIMIT, true)
 			if err != nil {
 				logger.Error("Error in querying new events", zap.Error(err))
 				continue

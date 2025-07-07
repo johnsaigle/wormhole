@@ -25,7 +25,12 @@ import (
 	"go.uber.org/zap"
 )
 
-const CCQ_SERVER_SIGNING_KEY = "CCQ SERVER SIGNING KEY"
+const (
+	CCQ_SERVER_SIGNING_KEY = "CCQ SERVER SIGNING KEY"
+	DefaultP2PPort         = 8995
+	DefaultShutdownDelay1  = 25
+	DefaultShutdownDelay2  = 65
+)
 
 var (
 	envStr                 *string
@@ -56,7 +61,7 @@ const DEV_NETWORK_ID = "/wormhole/dev"
 func init() {
 	envStr = QueryServerCmd.Flags().String("env", "", "environment (devnet, testnet, mainnet)")
 	p2pNetworkID = QueryServerCmd.Flags().String("network", "", "P2P network identifier (optional, overrides default for environment)")
-	p2pPort = QueryServerCmd.Flags().Uint("port", 8995, "P2P UDP listener port")
+	p2pPort = QueryServerCmd.Flags().Uint("port", DefaultP2PPort, "P2P UDP listener port")
 	p2pBootstrap = QueryServerCmd.Flags().String("bootstrap", "", "P2P bootstrap peers (optional for testnet or mainnet, overrides default, required for devnet)")
 	QueryServerCmd.Flags().StringSliceVarP(&protectedPeers, "protectedPeers", "", []string{}, "")
 	nodeKeyPath = QueryServerCmd.Flags().String("nodeKey", "", "Path to node key (will be generated if it doesn't exist)")
@@ -75,10 +80,10 @@ func init() {
 	verifyPermissions = QueryServerCmd.Flags().Bool("verifyPermissions", false, `parse and verify the permissions file and then exit with 0 if success, 1 if failure`)
 
 	// The default health check monitoring is every five seconds, with a five second timeout, and you have to miss two, for 20 seconds total.
-	shutdownDelay1 = QueryServerCmd.Flags().Uint("shutdownDelay1", 25, "Seconds to delay after disabling health check on shutdown")
+	shutdownDelay1 = QueryServerCmd.Flags().Uint("shutdownDelay1", DefaultShutdownDelay1, "Seconds to delay after disabling health check on shutdown")
 
 	// The guardians will wait up to 60 seconds before giving up on a request.
-	shutdownDelay2 = QueryServerCmd.Flags().Uint("shutdownDelay2", 65, "Seconds to wait after delay1 for pending requests to complete")
+	shutdownDelay2 = QueryServerCmd.Flags().Uint("shutdownDelay2", DefaultShutdownDelay2, "Seconds to wait after delay1 for pending requests to complete")
 }
 
 var QueryServerCmd = &cobra.Command{

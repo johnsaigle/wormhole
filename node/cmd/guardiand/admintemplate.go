@@ -25,6 +25,15 @@ import (
 	"github.com/certusone/wormhole/node/pkg/random"
 )
 
+const (
+	DefaultGuardianIndex = 4
+	AddressLength        = 32
+	ChannelIDMaxLength   = 64
+	MaxGuardianAddresses = 255
+	BinaryBase           = 2
+	BitSize256           = 256
+)
+
 var setUpdateNumGuardians *int
 var templateGuardianIndex *int
 var chainID *string
@@ -88,7 +97,7 @@ func init() {
 	moduleFlagSet := pflag.NewFlagSet("module", pflag.ExitOnError)
 	module = moduleFlagSet.String("module", "", "Module name")
 
-	templateGuardianIndex = TemplateCmd.PersistentFlags().Int("idx", 4, "Default current guardian set index")
+	templateGuardianIndex = TemplateCmd.PersistentFlags().Int("idx", DefaultGuardianIndex, "Default current guardian set index")
 
 	setUpdateNumGuardians = AdminClientGuardianSetTemplateCmd.Flags().Int("num", 1, "Number of devnet guardians in example file")
 	TemplateCmd.AddCommand(AdminClientGuardianSetTemplateCmd)
@@ -603,7 +612,7 @@ func runAccountantModifyBalanceTemplate(cmd *cobra.Command, args []string) {
 		log.Fatal("--amount must be specified.")
 	}
 	amount_big := big.NewInt(0)
-	amount_big, ok := amount_big.SetString(*accountantModifyBalanceAmount, 10)
+	amount_big, ok := amount_big.SetString(*accountantModifyBalanceAmount, DecimalBase)
 	if !ok {
 		log.Fatal("failed to parse amount")
 	}
@@ -796,7 +805,7 @@ func runWormchainStoreCodeTemplate(cmd *cobra.Command, args []string) {
 	}
 
 	// Validate the string is the correct length.
-	if len(buf) != 32 {
+	if len(buf) != AddressLength {
 		log.Fatalf("wasm-hash (expected 32 bytes but received %d bytes)", len(buf))
 	}
 
@@ -1054,7 +1063,7 @@ func runIbcUpdateChannelChainTemplate(module nodev1.IbcUpdateChannelChainModule)
 	if *ibcUpdateChannelChainChannelId == "" {
 		log.Fatal("--channel-id must be specified")
 	}
-	if len(*ibcUpdateChannelChainChannelId) > 64 {
+	if len(*ibcUpdateChannelChainChannelId) > ChannelIDMaxLength {
 		log.Fatal("invalid channel id length, must be <= 64")
 	}
 
@@ -1282,10 +1291,10 @@ func parseAddress(s string) (string, error) {
 }
 
 func leftPadAddress(a []byte) (string, error) {
-	if len(a) > 32 {
+	if len(a) > AddressLength {
 		return "", errors.New("address longer than 32 bytes")
 	}
-	return hex.EncodeToString(common.LeftPadBytes(a, 32)), nil
+	return hex.EncodeToString(common.LeftPadBytes(a, AddressLength)), nil
 }
 
 // parseChainID parses a human-readable chain name or a chain ID.
@@ -1306,11 +1315,11 @@ func parseChainID(name string) (vaa.ChainID, error) {
 
 func isValidUint256(s string) (bool, error) {
 	i := new(big.Int)
-	i.SetString(s, 10) // Parse in base 10
+	i.SetString(s, DecimalBase) // Parse in base 10
 
 	// Create upper limit as 2^256 - 1
 	upperLimit := new(big.Int)
-	upperLimit.Exp(big.NewInt(2), big.NewInt(256), nil)
+	upperLimit.Exp(big.NewInt(BinaryBase), big.NewInt(BitSize256), nil)
 	upperLimit.Sub(upperLimit, big.NewInt(1))
 
 	// Check if i is within the range [0, 2^256 - 1]

@@ -23,6 +23,11 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+const (
+	MaxPeerWaitCount      = 600
+	PeerWaitSleepDuration = 100 * time.Millisecond
+)
+
 type GuardianSignature struct {
 	Index     int
 	Signature string
@@ -119,11 +124,11 @@ func runP2P(
 	count := 0
 	for len(th_req.ListPeers()) < 1 {
 		count++
-		if count > 600 {
+		if count > MaxPeerWaitCount {
 			logger.Warn("Still waiting for peers")
 			count = 0
 		}
-		time.Sleep(time.Millisecond * 100)
+		time.Sleep(PeerWaitSleepDuration)
 	}
 	logger.Info("Found peers", zap.Int("numPeers", len(th_req.ListPeers())))
 

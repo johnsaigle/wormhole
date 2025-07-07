@@ -53,6 +53,13 @@ import (
 	ipfslog "github.com/ipfs/go-log/v2"
 )
 
+const (
+	DefaultCCQP2PPort          = 8996
+	BootstrapGuardianDelay     = 10 * time.Second
+	PrometheusScrapingInterval = 15 * time.Second
+	MinArgsForConsistency      = 2
+)
+
 var (
 	p2pNetworkID         *string
 	p2pPort              *uint
@@ -532,7 +539,7 @@ func init() {
 
 	ccqEnabled = NodeCmd.Flags().Bool("ccqEnabled", false, "Enable cross chain query support")
 	ccqAllowedRequesters = NodeCmd.Flags().String("ccqAllowedRequesters", "", "Comma separated list of signers allowed to submit cross chain queries")
-	ccqP2pPort = NodeCmd.Flags().Uint("ccqP2pPort", 8996, "CCQ P2P UDP listener port")
+	ccqP2pPort = NodeCmd.Flags().Uint("ccqP2pPort", DefaultCCQP2PPort, "CCQ P2P UDP listener port")
 	ccqP2pBootstrap = NodeCmd.Flags().String("ccqP2pBootstrap", "", "CCQ P2P bootstrap peers (optional for mainnet or testnet, overrides default, required for unsafeDevMode)")
 	NodeCmd.Flags().StringSliceVarP(&ccqProtectedPeers, "ccqProtectedPeers", "", []string{}, "")
 	ccqAllowedPeers = NodeCmd.Flags().String("ccqAllowedPeers", "", "CCQ allowed P2P peers (comma-separated)")
@@ -804,7 +811,7 @@ func runNode(cmd *cobra.Command, args []string) {
 			// This may no longer be necessary because now the p2p.go ensures that it can connect to at least one bootstrap peer and will
 			// exit the whole guardian if it is unable to. Sleeping here for a bit may reduce overall startup time by preventing unnecessary restarts, though.
 			logger.Info("This is not a bootstrap Guardian. Waiting another 10 seconds for the bootstrap guardian to come online.")
-			time.Sleep(time.Second * 10)
+			time.Sleep(BootstrapGuardianDelay)
 		}
 	} else {
 		p2pKey, err = common.GetOrCreateNodeKey(logger, *nodeKeyPath)
@@ -1251,7 +1258,7 @@ func runNode(cmd *cobra.Command, args []string) {
 		promLogger := logger.With(zap.String("component", "prometheus_scraper"))
 		errC := make(chan error)
 		common.StartRunnable(rootCtx, errC, false, "prometheus_scraper", func(ctx context.Context) error {
-			t := time.NewTicker(15 * time.Second)
+			t := time.NewTicker(PrometheusScrapingInterval)
 
 			for {
 				select {
@@ -2045,7 +2052,7 @@ func checkEvmArgs(logger *zap.Logger, rpcURL string, contractAddr string, chainI
 // argsConsistent verifies that the arguments in the array are all set or all unset.
 // Note that it doesn't validate the values, just whether they are blank or not.
 func argsConsistent(args []string) bool {
-	if len(args) < 2 {
+	if len(args) < MinArgsForConsistency {
 		panic("argsConsistent expects at least two args")
 	}
 

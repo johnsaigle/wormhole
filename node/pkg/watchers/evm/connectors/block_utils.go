@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math/big"
-	"time"
 )
 
 func GetLatestBlock(ctx context.Context, conn Connector) (*NewBlock, error) {
@@ -20,7 +19,7 @@ func GetBlockByNumberUint64(ctx context.Context, conn Connector, blockNum uint64
 }
 
 func GetBlock(ctx context.Context, conn Connector, str string, blockFinality FinalityLevel) (*NewBlock, error) {
-	timeout, cancel := context.WithTimeout(ctx, 15*time.Second)
+	timeout, cancel := context.WithTimeout(ctx, DefaultRPCTimeout)
 	defer cancel()
 
 	var m BlockMarshaller

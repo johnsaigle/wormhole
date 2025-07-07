@@ -15,6 +15,12 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	DefaultRPCTimeout     = 15 * time.Second
+	HeaderChannelCapacity = 2
+	MaxErrorCount         = 3
+)
+
 // BatchPollConnector uses batch requests to poll for latest, safe and finalized blocks.
 type BatchPollConnector struct {
 	Connector
@@ -67,7 +73,7 @@ func (b *BatchPollConnector) SubscribeForBlocks(ctx context.Context, errC chan e
 	// indicates that the subscription will receive a replay of all blocks affected by a rollback. This is important for latest because the
 	// timestamp cache needs to be updated on a rollback. We can only consider polling for latest if we can guarantee that we won't miss rollbacks.
 	// https://ethereum.org/en/developers/tutorials/using-websockets/#subscription-types
-	headSink := make(chan *ethTypes.Header, 2)
+	headSink := make(chan *ethTypes.Header, HeaderChannelCapacity)
 	headerSubscription, err := b.Connector.SubscribeNewHead(ctx, headSink)
 	if err != nil {
 		return headerSubscription, fmt.Errorf("failed to subscribe for latest blocks: %w", err)
@@ -105,7 +111,7 @@ func (b *BatchPollConnector) SubscribeForBlocks(ctx context.Context, errC chan e
 				if err != nil {
 					errCount++
 					b.logger.Error("batch polling encountered an error", zap.Int("errCount", errCount), zap.Error(err))
-					if errCount > 3 {
+					if errCount > MaxErrorCount {
 						errC <- fmt.Errorf("polling encountered too many errors: %w", err)
 						return nil
 					}
@@ -228,7 +234,7 @@ func (b *BatchPollConnector) pollBlocks(ctx context.Context, sink chan<- *NewBlo
 
 // getBlocks gets the current batch of configured blocks (finalized, safe, latest).
 func (b *BatchPollConnector) getBlocks(ctx context.Context, logger *zap.Logger) (Blocks, error) {
-	timeout, cancel := context.WithTimeout(ctx, 15*time.Second)
+	timeout, cancel := context.WithTimeout(ctx, DefaultRPCTimeout)
 	defer cancel()
 
 	batch := make([]rpc.BatchElem, len(b.batchData))
@@ -287,7 +293,7 @@ func (b *BatchPollConnector) getBlocks(ctx context.Context, logger *zap.Logger) 
 
 // getBlockRange gets a range of blocks, starting at blockNum, including the next numBlocks. It passes back an array of those blocks.
 func (b *BatchPollConnector) getBlockRange(ctx context.Context, logger *zap.Logger, blockNum uint64, numBlocks uint64, finality FinalityLevel) (Blocks, error) {
-	timeout, cancel := context.WithTimeout(ctx, 15*time.Second)
+	timeout, cancel := context.WithTimeout(ctx, DefaultRPCTimeout)
 	defer cancel()
 
 	batch := make([]rpc.BatchElem, numBlocks)

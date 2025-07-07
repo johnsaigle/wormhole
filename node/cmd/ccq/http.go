@@ -20,6 +20,10 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+const (
+	HttpReadHeaderTimeout = 5 * time.Second
+)
+
 const MAX_BODY_SIZE = 5 * 1024 * 1024
 
 type queryRequest struct {
@@ -255,6 +259,6 @@ func NewHTTPServer(addr string, t *pubsub.Topic, permissions *Permissions, signe
 	return &http.Server{
 		Addr:              addr,
 		Handler:           r,
-		ReadHeaderTimeout: 5 * time.Second,
+		ReadHeaderTimeout: HttpReadHeaderTimeout,
 	}
 }

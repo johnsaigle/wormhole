@@ -42,6 +42,14 @@ import (
 	sdktypes "github.com/cosmos/cosmos-sdk/types"
 )
 
+const (
+	AddressLength        = 32
+	DecimalBase          = 10
+	ChannelIDMaxLength   = 64
+	MaxGuardianAddresses = 255
+	DefaultHTTPTimeout   = 30 * time.Second
+)
+
 const maxResetReleaseTimerDays = 30
 const ecdsaSignatureLength = 65
 
@@ -146,7 +154,7 @@ func adminContractUpgradeToVAA(req *nodev1.ContractUpgrade, timestamp time.Time,
 		return nil, errors.New("invalid new contract address encoding (expected hex)")
 	}
 
-	if len(b) != 32 {
+	if len(b) != AddressLength {
 		return nil, errors.New("invalid new_contract address")
 	}
 
@@ -182,7 +190,7 @@ func tokenBridgeRegisterChain(req *nodev1.BridgeRegisterChain, timestamp time.Ti
 		return nil, errors.New("invalid emitter address encoding (expected hex)")
 	}
 
-	if len(b) != 32 {
+	if len(b) != AddressLength {
 		return nil, errors.New("invalid emitter address (expected 32 bytes)")
 	}
 
@@ -207,7 +215,7 @@ func tokenBridgeRegisterChain(req *nodev1.BridgeRegisterChain, timestamp time.Ti
 // Returns an error if the data is invalid.
 func recoverChainId(req *nodev1.RecoverChainId, timestamp time.Time, guardianSetIndex uint32, nonce uint32, sequence uint64) (*vaa.VAA, error) {
 	evm_chain_id_big := big.NewInt(0)
-	evm_chain_id_big, ok := evm_chain_id_big.SetString(req.EvmChainId, 10)
+	evm_chain_id_big, ok := evm_chain_id_big.SetString(req.EvmChainId, DecimalBase)
 	if !ok {
 		return nil, errors.New("invalid evm_chain_id")
 	}
@@ -254,7 +262,7 @@ func accountantModifyBalance(req *nodev1.AccountantModifyBalance, timestamp time
 		return nil, errors.New("invalid token address (expected hex)")
 	}
 
-	if len(b) != 32 {
+	if len(b) != AddressLength {
 		return nil, errors.New("invalid new token address (expected 32 bytes)")
 	}
 
@@ -263,7 +271,7 @@ func accountantModifyBalance(req *nodev1.AccountantModifyBalance, timestamp time
 	}
 
 	amount_big := big.NewInt(0)
-	amount_big, ok := amount_big.SetString(req.Amount, 10)
+	amount_big, ok := amount_big.SetString(req.Amount, DecimalBase)
 	if !ok {
 		return nil, errors.New("invalid amount")
 	}
@@ -310,7 +318,7 @@ func tokenBridgeUpgradeContract(req *nodev1.BridgeUpgradeContract, timestamp tim
 		return nil, errors.New("invalid new contract address (expected hex)")
 	}
 
-	if len(b) != 32 {
+	if len(b) != AddressLength {
 		return nil, errors.New("invalid new contract address (expected 32 bytes)")
 	}
 
@@ -340,7 +348,7 @@ func wormchainStoreCode(req *nodev1.WormchainStoreCode, timestamp time.Time, gua
 		return nil, fmt.Errorf("invalid cosmwasm bytecode hash (expected hex): %w", err)
 	}
 
-	if len(b) != 32 {
+	if len(b) != AddressLength {
 		return nil, fmt.Errorf("invalid cosmwasm bytecode hash (expected 32 bytes but received %d bytes)", len(b))
 	}
 
@@ -531,7 +539,7 @@ func circleIntegrationRegisterEmitterAndDomain(req *nodev1.CircleIntegrationRegi
 		return nil, errors.New("invalid foreign emitter address encoding (expected hex)")
 	}
 
-	if len(b) != 32 {
+	if len(b) != AddressLength {
 		return nil, errors.New("invalid foreign emitter address (expected 32 bytes)")
 	}
 
@@ -564,7 +572,7 @@ func circleIntegrationUpgradeContractImplementation(req *nodev1.CircleIntegratio
 		return nil, errors.New("invalid new implementation address encoding (expected hex)")
 	}
 
-	if len(b) != 32 {
+	if len(b) != AddressLength {
 		return nil, errors.New("invalid new implementation address (expected 32 bytes)")
 	}
 
@@ -600,7 +608,7 @@ func ibcUpdateChannelChain(
 		return nil, fmt.Errorf("invalid chain id, must be <= %d", math.MaxUint16)
 	}
 
-	if len(req.ChannelId) > 64 {
+	if len(req.ChannelId) > ChannelIDMaxLength {
 		return nil, fmt.Errorf("invalid channel ID length, must be <= 64")
 	}
 	channelId, err := vaa.LeftPadIbcChannelId(req.ChannelId)
@@ -643,7 +651,7 @@ func wormholeRelayerSetDefaultDeliveryProvider(req *nodev1.WormholeRelayerSetDef
 		return nil, errors.New("invalid new default delivery provider address (expected hex)")
 	}
 
-	if len(b) != 32 {
+	if len(b) != AddressLength {
 		return nil, errors.New("invalid new default delivery provider address (expected 32 bytes)")
 	}
 
@@ -670,7 +678,7 @@ func coreBridgeSetMessageFeeToVaa(req *nodev1.CoreBridgeSetMessageFee, timestamp
 	}
 
 	new_fee_big := big.NewInt(0)
-	new_fee_big, ok := new_fee_big.SetString(req.MessageFee, 10)
+	new_fee_big, ok := new_fee_big.SetString(req.MessageFee, DecimalBase)
 	if !ok {
 		return nil, errors.New("invalid new fee")
 	}
@@ -726,7 +734,7 @@ func solanaCallToVaa(solanaCall *nodev1.SolanaCall, timestamp time.Time, guardia
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode base58 governance contract address: %w", err)
 	}
-	if len(address) != 32 {
+	if len(address) != AddressLength {
 		return nil, errors.New("invalid governance contract address length (expected 32 bytes)")
 	}
 
@@ -1168,7 +1176,7 @@ func (s *nodePrivilegedService) SignExistingVAA(ctx context.Context, req *nodev1
 		return nil, fmt.Errorf("failed to verify existing VAA: %w", err)
 	}
 
-	if len(req.NewGuardianAddrs) > 255 {
+	if len(req.NewGuardianAddrs) > MaxGuardianAddresses {
 		return nil, errors.New("new guardian set has too many guardians")
 	}
 	newGS := make([]ethcommon.Address, len(req.NewGuardianAddrs))
@@ -1283,7 +1291,7 @@ func (s *nodePrivilegedService) GetAndObserveMissingVAAs(ctx context.Context, re
 	httpRequest.Header.Set("Content-Type", "application/json")
 
 	client := http.Client{
-		Timeout: 30 * time.Second,
+		Timeout: DefaultHTTPTimeout,
 	}
 
 	// Call the cloud function to get the missing VAAs

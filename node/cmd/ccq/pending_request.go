@@ -10,6 +10,10 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	DefaultPendingResponsesCapacity = 100
+)
+
 type PendingResponse struct {
 	req          *gossipv1.SignedQueryRequest
 	userName     string
@@ -48,7 +52,7 @@ type PendingResponses struct {
 func NewPendingResponses(logger *zap.Logger) *PendingResponses {
 	return &PendingResponses{
 		// Make this channel bigger than the number of responses we ever expect to get for a query.
-		pendingResponses: make(map[string]*PendingResponse, 100),
+		pendingResponses: make(map[string]*PendingResponse, DefaultPendingResponsesCapacity),
 		logger:           logger,
 	}
 }

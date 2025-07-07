@@ -15,6 +15,10 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	DefaultPruneHeightDelta = 10
+)
+
 var TransferVerifierCmdEvm = &cobra.Command{
 	Use:   "evm",
 	Short: "Transfer Verifier for EVM-based chains",
@@ -43,7 +47,7 @@ func init() {
 	evmCoreContract = TransferVerifierCmdEvm.Flags().String("coreContract", "", "core bridge address")
 	evmTokenBridgeContract = TransferVerifierCmdEvm.Flags().String("tokenContract", "", "token bridge")
 	wrappedNativeContract = TransferVerifierCmdEvm.Flags().String("wrappedNativeContract", "", "wrapped native address (e.g. WETH on Ethereum)")
-	pruneHeightDelta = TransferVerifierCmdEvm.Flags().Uint64("pruneHeightDelta", 10, "The number of blocks for which to retain transaction receipts. Defaults to 10 blocks.")
+	pruneHeightDelta = TransferVerifierCmdEvm.Flags().Uint64("pruneHeightDelta", DefaultPruneHeightDelta, "The number of blocks for which to retain transaction receipts. Defaults to 10 blocks.")
 
 	TransferVerifierCmd.MarkFlagRequired("rpcUrl")
 	TransferVerifierCmd.MarkFlagRequired("coreContract")

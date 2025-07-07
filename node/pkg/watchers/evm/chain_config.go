@@ -23,6 +23,10 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	DefaultRPCTimeout = 15 * time.Second
+)
+
 type (
 	// EnvEntry specifies the config data for a given chain / environment.
 	EnvEntry struct {
@@ -225,7 +229,7 @@ func GetChainConfigMap(env common.Environment) (EnvMap, error) {
 
 // QueryEvmChainID queries the specified RPC for the EVM chain ID.
 func QueryEvmChainID(ctx context.Context, url string) (uint64, error) {
-	timeout, cancel := context.WithTimeout(ctx, 15*time.Second)
+	timeout, cancel := context.WithTimeout(ctx, DefaultRPCTimeout)
 	defer cancel()
 
 	c, err := rpc.DialContext(timeout, url)
@@ -254,7 +258,7 @@ func (w *Watcher) verifyEvmChainID(ctx context.Context, logger *zap.Logger, url 
 		return nil
 	}
 
-	timeout, cancel := context.WithTimeout(ctx, 15*time.Second)
+	timeout, cancel := context.WithTimeout(ctx, DefaultRPCTimeout)
 	defer cancel()
 
 	c, err := rpc.DialContext(timeout, url)

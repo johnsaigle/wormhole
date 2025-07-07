@@ -19,6 +19,10 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	EventChannelCapacity = 64
+)
+
 // baseWatcher is the entry point for the base accountant watcher.
 func (acct *Accountant) baseWatcher(ctx context.Context) error {
 	return acct.watcher(ctx, false)
@@ -62,7 +66,7 @@ func (acct *Accountant) watcher(ctx context.Context, isNTT bool) error {
 		ctx,
 		"guardiand",
 		query,
-		64, // channel capacity
+		EventChannelCapacity, // channel capacity
 	)
 	if err != nil {
 		return fmt.Errorf("failed to subscribe to %s events: %w", tag, err)

@@ -14,6 +14,11 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	StatusReadHeaderTimeout    = 5 * time.Second
+	PrometheusScrapingInterval = 15 * time.Second
+)
+
 type statusServer struct {
 	logger        *zap.Logger
 	env           common.Environment
@@ -33,7 +38,7 @@ func NewStatusServer(addr string, logger *zap.Logger, env common.Environment) *s
 	s.httpServer = &http.Server{
 		Addr:              addr,
 		Handler:           r,
-		ReadHeaderTimeout: 5 * time.Second,
+		ReadHeaderTimeout: StatusReadHeaderTimeout,
 	}
 	return s
 }
@@ -57,7 +62,7 @@ func RunPrometheusScraper(ctx context.Context, logger *zap.Logger, info promremo
 	promLogger := logger.With(zap.String("component", "prometheus_scraper"))
 	errC := make(chan error)
 	common.StartRunnable(ctx, errC, false, "prometheus_scraper", func(ctx context.Context) error {
-		t := time.NewTicker(15 * time.Second)
+		t := time.NewTicker(PrometheusScrapingInterval)
 
 		for {
 			select {

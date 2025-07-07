@@ -34,7 +34,12 @@ import (
 // ReadLimitSize can be used to increase the read limit size on the listening connection. The default read limit size is not large enough,
 // causing "failed to read: read limited at 32769 bytes" errors during testing. Increasing this limit effects an internal buffer that
 // is used to as part of the zero alloc/copy design.
-const ReadLimitSize = 524288
+const (
+	ReadLimitSize           = 524288
+	DefaultTickerInterval   = 5 * time.Second
+	DefaultHTTPTimeout      = 5 * time.Second
+	TerraClassicBlockHeight = 13215800
+)
 
 type (
 	// Watcher is responsible for looking over a cosmwasm blockchain and reporting new transactions to the contract
@@ -196,9 +201,9 @@ func (e *Watcher) Run(ctx context.Context) error {
 	readiness.SetReady(e.readinessSync)
 
 	common.RunWithScissors(ctx, errC, "cosmwasm_block_height", func(ctx context.Context) error {
-		t := time.NewTicker(5 * time.Second)
+		t := time.NewTicker(DefaultTickerInterval)
 		client := &http.Client{
-			Timeout: time.Second * 5,
+			Timeout: DefaultHTTPTimeout,
 		}
 
 		for {
@@ -257,7 +262,7 @@ func (e *Watcher) Run(ctx context.Context) error {
 				logger.Info("received observation request", zap.String("network", networkName), zap.String("tx_hash", tx))
 
 				client := &http.Client{
-					Timeout: time.Second * 5,
+					Timeout: DefaultHTTPTimeout,
 				}
 
 				// Query for tx by hash
@@ -298,7 +303,7 @@ func (e *Watcher) Run(ctx context.Context) error {
 						continue
 					}
 					blockHeight := blockHeightStr.Int()
-					if blockHeight < 13215800 {
+					if blockHeight < TerraClassicBlockHeight {
 						logger.Info("doing look up of old tx", zap.String("network", networkName), zap.String("txHash", txHash), zap.Int64("blockHeight", blockHeight))
 						contractAddressLogKey = "contract_address"
 					}

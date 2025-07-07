@@ -2,7 +2,6 @@ package connectors
 
 import (
 	"context"
-	"time"
 
 	ethAbi "github.com/certusone/wormhole/node/pkg/watchers/evm/connectors/ethabi"
 
@@ -75,7 +74,7 @@ func (e *EthereumBaseConnector) GetGuardianSet(ctx context.Context, index uint32
 }
 
 func (e *EthereumBaseConnector) WatchLogMessagePublished(ctx context.Context, _ chan error, sink chan<- *ethAbi.AbiLogMessagePublished) (ethEvent.Subscription, error) {
-	timeout, cancel := context.WithTimeout(ctx, 15*time.Second)
+	timeout, cancel := context.WithTimeout(ctx, DefaultRPCTimeout)
 	defer cancel()
 	return e.filterer.WatchLogMessagePublished(&ethBind.WatchOpts{Context: timeout}, sink, nil)
 }

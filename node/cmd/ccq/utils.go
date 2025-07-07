@@ -25,8 +25,12 @@ import (
 	"github.com/gagliardetto/solana-go"
 )
 
+const (
+	GuardianSetFetchTimeout = 5 * time.Second
+)
+
 func FetchCurrentGuardianSet(ctx context.Context, rpcUrl, coreAddr string) (*common.GuardianSet, error) {
-	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
+	ctx, cancel := context.WithTimeout(ctx, GuardianSetFetchTimeout)
 	defer cancel()
 	ethContract := eth_common.HexToAddress(coreAddr)
 	rawClient, err := ethRpc.DialContext(ctx, rpcUrl)

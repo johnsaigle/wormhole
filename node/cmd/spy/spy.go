@@ -29,6 +29,12 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+const (
+	DefaultSpyP2PPort        = 8999
+	DefaultSendTimeout       = 5 * time.Second
+	SignedVAAChannelCapacity = 1024
+)
+
 var (
 	rootCtx       context.Context
 	rootCtxCancel context.CancelFunc
@@ -59,7 +65,7 @@ var (
 func init() {
 	envStr = SpyCmd.Flags().String("env", "", `environment (may be "testnet" or "mainnet", required unless "--bootstrap" is specified)`)
 	p2pNetworkID = SpyCmd.Flags().String("network", "", "P2P network identifier (optional for testnet or mainnet, overrides default, required for devnet)")
-	p2pPort = SpyCmd.Flags().Uint("port", 8999, "P2P UDP listener port")
+	p2pPort = SpyCmd.Flags().Uint("port", DefaultSpyP2PPort, "P2P UDP listener port")
 	p2pBootstrap = SpyCmd.Flags().String("bootstrap", "", "P2P bootstrap peers (optional for testnet or mainnet, overrides default, required for devnet)")
 	SpyCmd.Flags().StringSliceVarP(&protectedPeers, "protectedPeers", "", []string{}, "")
 
@@ -71,7 +77,7 @@ func init() {
 
 	spyRPC = SpyCmd.Flags().String("spyRPC", "", "Listen address for gRPC interface")
 
-	sendTimeout = SpyCmd.Flags().Duration("sendTimeout", 5*time.Second, "Timeout for sending a message to a subscriber")
+	sendTimeout = SpyCmd.Flags().Duration("sendTimeout", DefaultSendTimeout, "Timeout for sending a message to a subscriber")
 
 	ethRPC = SpyCmd.Flags().String("ethRPC", "", "Ethereum RPC for verifying VAAs (optional)")
 	ethContract = SpyCmd.Flags().String("ethContract", "", "Ethereum core bridge address for verifying VAAs (required if ethRPC is specified)")
@@ -344,7 +350,7 @@ func runSpy(cmd *cobra.Command, args []string) {
 	defer rootCtxCancel()
 
 	// Inbound signed VAAs
-	signedInC := make(chan *gossipv1.SignedVAAWithQuorum, 1024)
+	signedInC := make(chan *gossipv1.SignedVAAWithQuorum, SignedVAAChannelCapacity)
 
 	// Guardian set state managed by processor
 	gst := common.NewGuardianSetState(nil)

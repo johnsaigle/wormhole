@@ -25,6 +25,10 @@ import (
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 )
 
+const (
+	AdminServiceTimeout = 5 * time.Second
+)
+
 func adminServiceRunnable(
 	logger *zap.Logger,
 	socketPath string,
