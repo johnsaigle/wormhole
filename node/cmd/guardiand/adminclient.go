@@ -38,6 +38,16 @@ import (
 	nodev1 "github.com/certusone/wormhole/node/pkg/proto/node/v1"
 )
 
+const (
+	DefaultAdminTimeout  = 5 * time.Second
+	LongAdminTimeout     = 10 * time.Minute
+	ExtendedAdminTimeout = 30 * time.Second
+	MessageIDParts       = 3
+	DecimalBase          = 10
+	HashBufferSize       = 10 * 1024 * 1024 // 10 MB chunks
+	CSVRowElements       = 2
+)
+
 var (
 	clientSocketPath *string
 	shouldBackfill   *bool
@@ -107,7 +117,8 @@ var AdminClientSignWormchainAddress = &cobra.Command{
 	Use:   "sign-wormchain-address [vaa-signer-uri] [wormchain-validator-address]",
 	Short: "Sign a wormchain validator address.  Only sign the address that you control the key for and will be for your validator.",
 	RunE:  runSignWormchainValidatorAddress,
-	Args:  cobra.ExactArgs(2),
+	//nolint:mnd // Constant would not provide clarity
+	Args:  cobra.ExactArgs(2), 
 }
 
 var AdminClientInjectGuardianSetUpdateCmd = &cobra.Command{
@@ -121,6 +132,7 @@ var AdminClientFindMissingMessagesCmd = &cobra.Command{
 	Use:   "find-missing-messages [CHAIN_ID] [EMITTER_ADDRESS_HEX]",
 	Short: "Find sequence number gaps for the given chain ID and emitter address",
 	Run:   runFindMissingMessages,
+	//nolint:mnd // Constant would not provide clarity
 	Args:  cobra.ExactArgs(2),
 }
 
@@ -135,6 +147,7 @@ var SendObservationRequest = &cobra.Command{
 	Use:   "send-observation-request [CHAIN_ID|CHAIN_NAME] [TX_HASH_HEX]",
 	Short: "Broadcast an observation request for the given chain ID and chain-specific tx_hash",
 	Run:   runSendObservationRequest,
+	//nolint:mnd // Constant would not provide clarity
 	Args:  cobra.ExactArgs(2),
 }
 
@@ -142,6 +155,7 @@ var ReobserveWithEndpoint = &cobra.Command{
 	Use:   "reobserve-with-endpoint [CHAIN_ID|CHAIN_NAME] [TX_HASH_HEX] [CUSTOM_URL]",
 	Short: "Performs a local reobservation for the given chain ID and chain-specific tx_hash using the specified endpoint",
 	Run:   runReobserveWithEndpoint,
+	//nolint:mnd // Constant would not provide clarity
 	Args:  cobra.ExactArgs(3),
 }
 
@@ -177,6 +191,7 @@ var ClientChainGovernorResetReleaseTimerCmd = &cobra.Command{
 	Use:   "governor-reset-release-timer [VAA_ID] <num_days>",
 	Short: "Resets the release timer for a chain governor pending VAA, extending it to num_days (up to a maximum of 30), defaulting to one day if num_days is omitted",
 	Run:   runChainGovernorResetReleaseTimer,
+	//nolint:mnd // Constant would not provide clarity
 	Args:  cobra.RangeArgs(1, 2),
 }
 
@@ -184,6 +199,7 @@ var PurgePythNetVaasCmd = &cobra.Command{
 	Use:   "purge-pythnet-vaas [DAYS_OLD] <logonly>",
 	Short: "Deletes PythNet VAAs from the database that are more than [DAYS_OLD] days only (if logonly is specified, doesn't delete anything)",
 	Run:   runPurgePythNetVaas,
+	//nolint:mnd // Constant would not provide clarity
 	Args:  cobra.RangeArgs(1, 2),
 }
 
@@ -191,6 +207,7 @@ var SignExistingVaaCmd = &cobra.Command{
 	Use:   "sign-existing-vaa [VAA] [NEW_GUARDIANS] [NEW_GUARDIAN_SET_INDEX]",
 	Short: "Signs an existing VAA for a new guardian set using the local guardian key. This only works if the new VAA would have quorum.",
 	Run:   runSignExistingVaa,
+	//nolint:mnd // Constant would not provide clarity
 	Args:  cobra.ExactArgs(3),
 }
 
@@ -198,6 +215,7 @@ var SignExistingVaasFromCSVCmd = &cobra.Command{
 	Use:   "sign-existing-vaas-csv [IN_FILE] [OUT_FILE] [NEW_GUARDIANS] [NEW_GUARDIAN_SET_INDEX]",
 	Short: "Signs a CSV [VAA_ID,VAA_HEX] of existing VAAs for a new guardian set using the local guardian key and writes it to a new CSV. VAAs that don't have quorum on the new set will be dropped.",
 	Run:   runSignExistingVaasFromCSV,
+	//nolint:mnd // Constant would not provide clarity
 	Args:  cobra.ExactArgs(4),
 }
 
@@ -212,6 +230,7 @@ var GetAndObserveMissingVAAs = &cobra.Command{
 	Use:   "get-and-observe-missing-vaas [URL] [API_KEY]",
 	Short: "Get the list of missing VAAs from a cloud function and try to reobserve them.",
 	Run:   runGetAndObserveMissingVAAs,
+	//nolint:mnd // Constant would not provide clarity
 	Args:  cobra.ExactArgs(2),
 }
 
@@ -275,7 +294,7 @@ func runSignWormchainValidatorAddress(cmd *cobra.Command, args []string) error {
 
 func runInjectGovernanceVAA(cmd *cobra.Command, args []string) {
 	path := args[0]
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultAdminTimeout)
 	defer cancel()
 
 	conn, c, err := getAdminClient(ctx, *clientSocketPath)
@@ -313,7 +332,7 @@ func runFindMissingMessages(cmd *cobra.Command, args []string) {
 
 	emitterAddress := args[1]
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), LongAdminTimeout)
 	defer cancel()
 
 	conn, c, err := getAdminClient(ctx, *clientSocketPath)
@@ -350,10 +369,10 @@ func runFindMissingMessages(cmd *cobra.Command, args []string) {
 func runDumpVAAByMessageID(cmd *cobra.Command, args []string) {
 	// Parse the {chain,emitter,seq} string.
 	parts := strings.Split(args[0], "/")
-	if len(parts) != 3 {
+	if len(parts) != MessageIDParts {
 		log.Fatalf("invalid message ID: %s", args[0])
 	}
-	chainID, err := strconv.ParseUint(parts[0], 10, 32)
+	chainID, err := strconv.ParseUint(parts[0], DecimalBase, 32)
 	if err != nil {
 		log.Fatalf("invalid chain ID: %v", err)
 	}
@@ -361,12 +380,12 @@ func runDumpVAAByMessageID(cmd *cobra.Command, args []string) {
 		log.Fatalf("chain id must not exceed the max uint16: %v", chainID)
 	}
 	emitterAddress := parts[1]
-	seq, err := strconv.ParseUint(parts[2], 10, 64)
+	seq, err := strconv.ParseUint(parts[2], DecimalBase, 64)
 	if err != nil {
 		log.Fatalf("invalid sequence number: %v", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultAdminTimeout)
 	defer cancel()
 
 	conn, c, err := getPublicRPCServiceClient(ctx, *clientSocketPath)
@@ -416,7 +435,7 @@ func runSendObservationRequest(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultAdminTimeout)
 	defer cancel()
 
 	conn, c, err := getAdminClient(ctx, *clientSocketPath)
@@ -457,7 +476,7 @@ func runReobserveWithEndpoint(cmd *cobra.Command, args []string) {
 	}
 
 	// Allow extra time since the watcher can block on the reobservation.
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), ExtendedAdminTimeout)
 	defer cancel()
 
 	conn, c, err := getAdminClient(ctx, *clientSocketPath)
@@ -482,7 +501,7 @@ func runReobserveWithEndpoint(cmd *cobra.Command, args []string) {
 }
 
 func runDumpRPCs(cmd *cobra.Command, args []string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultAdminTimeout)
 	defer cancel()
 
 	conn, c, err := getAdminClient(ctx, *clientSocketPath)
@@ -510,7 +529,7 @@ func runGetAndObserveMissingVAAs(cmd *cobra.Command, args []string) {
 	if len(apiKey) == 0 {
 		log.Fatalf("missing api key")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), ExtendedAdminTimeout)
 	defer cancel()
 
 	conn, c, err := getAdminClient(ctx, *clientSocketPath)
@@ -532,7 +551,7 @@ func runGetAndObserveMissingVAAs(cmd *cobra.Command, args []string) {
 }
 
 func runChainGovernorStatus(cmd *cobra.Command, args []string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultAdminTimeout)
 	defer cancel()
 
 	conn, c, err := getAdminClient(ctx, *clientSocketPath)
@@ -551,7 +570,7 @@ func runChainGovernorStatus(cmd *cobra.Command, args []string) {
 }
 
 func runChainGovernorReload(cmd *cobra.Command, args []string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultAdminTimeout)
 	defer cancel()
 
 	conn, c, err := getAdminClient(ctx, *clientSocketPath)
@@ -570,7 +589,7 @@ func runChainGovernorReload(cmd *cobra.Command, args []string) {
 }
 
 func runChainGovernorDropPendingVAA(cmd *cobra.Command, args []string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultAdminTimeout)
 	defer cancel()
 
 	conn, c, err := getAdminClient(ctx, *clientSocketPath)
@@ -591,7 +610,7 @@ func runChainGovernorDropPendingVAA(cmd *cobra.Command, args []string) {
 }
 
 func runChainGovernorReleasePendingVAA(cmd *cobra.Command, args []string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultAdminTimeout)
 	defer cancel()
 
 	conn, c, err := getAdminClient(ctx, *clientSocketPath)
@@ -612,7 +631,7 @@ func runChainGovernorReleasePendingVAA(cmd *cobra.Command, args []string) {
 }
 
 func runChainGovernorResetReleaseTimer(cmd *cobra.Command, args []string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultAdminTimeout)
 	defer cancel()
 
 	conn, c, err := getAdminClient(ctx, *clientSocketPath)
@@ -761,7 +780,7 @@ func runSignExistingVaasFromCSV(cmd *cobra.Command, args []string) {
 			}
 			log.Fatalf("failed to parse VAA CSV: %v", err)
 		}
-		if len(row) != 2 {
+		if len(row) != CSVRowElements {
 			log.Fatalf("row [%d] does not have 2 elements", numOldVAAs)
 		}
 		numOldVAAs++
@@ -783,7 +802,7 @@ func runSignExistingVaasFromCSV(cmd *cobra.Command, args []string) {
 			}
 			log.Fatalf("failed to parse VAA CSV: %v", err)
 		}
-		if len(row) != 2 {
+		if len(row) != CSVRowElements {
 			log.Fatalf("row [%d] does not have 2 elements", i)
 		}
 		i++
@@ -821,7 +840,7 @@ func runKeccak256Hash(cmd *cobra.Command, args []string) {
 	reader := bufio.NewReader(os.Stdin)
 	hash := sha3.NewLegacyKeccak256()
 	// ~10 MB chunks
-	buf := make([]byte, 10*1024*1024)
+	buf := make([]byte, HashBufferSize)
 	for {
 		count, err := reader.Read(buf)
 		if err != nil && err != io.EOF {
