@@ -169,6 +169,7 @@ linters:
         # UNIX permissions
        - '0077'
        - '0600'
+       - '0644'
        - '0666'
        - '0755'
      # List of file patterns to exclude from analysis.
