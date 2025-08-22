@@ -29,6 +29,67 @@ func goodFunction() {
 }
 ```
 
+### chain-id-validation-checker
+
+Detects direct casts to `vaa.ChainID` from integer types and ensures they use proper validation functions to prevent runtime panics from invalid chain IDs.
+
+**What it checks:**
+- Direct casts like `vaa.ChainID(someInt)` without prior validation
+- All integer types: `int`, `int8`, `int16`, `int32`, `int64`, `uint`, `uint8`, `uint16`, `uint32`, `uint64`
+- External data sources (protobuf, JSON, network responses) that need validation
+- Verifies validation functions (`ChainIDFromNumber`, `KnownChainIDFromNumber`) are used
+- Allows safe cases: constants, literals, and already-validated values
+
+**Example violations:**
+```go
+// BAD: Direct cast without validation
+func processMessage(req *ProtobufRequest) {
+    chain := vaa.ChainID(req.ChainId) // Will be flagged - no validation
+    handleMessage(chain)
+}
+
+// BAD: All integer types without validation
+func badCasts(u32 uint32, i64 int64, u16 uint16) {
+    chain1 := vaa.ChainID(u32) // Will be flagged
+    chain2 := vaa.ChainID(i64) // Will be flagged  
+    chain3 := vaa.ChainID(u16) // Will be flagged
+}
+
+// BAD: JSON/external data without validation
+func processJSON(data map[string]interface{}) {
+    chainFloat := data["chainId"].(float64)
+    chain := vaa.ChainID(chainFloat) // Will be flagged - external data
+}
+
+// GOOD: Using proper validation
+func processMessageSafe(req *ProtobufRequest) error {
+    chain, err := vaa.KnownChainIDFromNumber(req.ChainId) // Will NOT be flagged
+    if err != nil {
+        return fmt.Errorf("invalid chain: %w", err)
+    }
+    handleMessage(chain)
+    return nil
+}
+
+// GOOD: Validation in same scope
+func processWithScopeValidation(userInput uint32) (vaa.ChainID, error) {
+    validated, err := vaa.ChainIDFromNumber(userInput)
+    if err != nil {
+        return 0, err
+    }
+    // This cast is OK because validation happened in same function
+    return vaa.ChainID(validated), nil // Will NOT be flagged
+}
+
+// GOOD: Constants and literals are safe
+func processConstants() {
+    chain1 := vaa.ChainID(vaa.ChainIDSolana) // Will NOT be flagged - constant
+    chain2 := vaa.ChainID(1)                 // Will NOT be flagged - literal
+}
+```
+
+This rule helps prevent runtime panics from invalid chain IDs and ensures all user/external input goes through proper validation before being used as a ChainID.
+
 ## Usage
 
 ### Build the Custom Revive Binary

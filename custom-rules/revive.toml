@@ -16,3 +16,9 @@ warningCode = 2
   # - "~\.(pb|auto|generated)\.go$" - exclude generated files (regex)
   # - "specific/path/file.go" - exclude specific files
   Exclude = ["**/*_test.go", "**/testdata/**", "**/mock*.go", "**/*.pb.go", "**/*.proto"]
+
+# Enable our custom chain-id-validation-checker rule
+[rule.chain-id-validation-checker]
+  severity = "error"
+  # Exclude test files where direct casts might be acceptable for test data
+  Exclude = ["**/*_test.go", "**/testdata/**", "**/mock*.go", "**/*.pb.go", "**/*.proto"]

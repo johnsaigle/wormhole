@@ -7,9 +7,13 @@ import (
 )
 
 func main() {
-	// Create our custom rule
+	// Create our custom rules
 	alreadyLockedRule := &AlreadyLockedRule{}
+	chainIDValidationRule := &ChainIDValidationRule{}
 
-	// Run revive with our custom rule added
-	cli.RunRevive(revivelib.NewExtraRule(alreadyLockedRule, lint.RuleConfig{}))
+	// Run revive with our custom rules added
+	cli.RunRevive(
+		revivelib.NewExtraRule(alreadyLockedRule, lint.RuleConfig{}),
+		revivelib.NewExtraRule(chainIDValidationRule, lint.RuleConfig{}),
+	)
 }
