@@ -1,5 +1,28 @@
 # Governor
 
+## Chain Configuration
+
+### Big Transaction Size and Daily Limit
+
+Each governed chain has two key configuration parameters:
+- **Daily Limit**: The maximum USD value of small transfers that can be emitted from a chain within a 24-hour sliding window
+- **Big Transaction Size**: The threshold above which a transfer is considered "big" and automatically delayed for 24 hours
+
+#### Special Configuration: BigTransactionSize or DailyLimit == 0
+
+When a chain is configured with `BigTransactionSize: 0`, the Governor automatically disables big transaction checks for that chain via the `checkForBigTransactions` flag. This prevents all transfers from being incorrectly classified as "big transfers."
+
+**Use Cases**:
+- **Small-Only Transfers**: Setting `BigTransactionSize: 0` with a non-zero `DailyLimit` means all transfers are treated as small transfers and only subject to the daily limit
+- **Delaying all transfers**: Setting both `DailyLimit: 0` and `BigTransactionSize: 0` disable the big transfer check and sets the daily limit to zero. This means any token transfer will exceed the daily limit and will be queued.
+
+**Example**
+```go
+{EmitterChainID: vaa.ChainIDXLayer, DailyLimit: 0, BigTransactionSize: 0}
+```
+
+This configuration means all XLayer transfers will be delayed.
+
 ## Performing a database upgrade
 
 A database upgrade is required whenever the serialized format of a `MessagePublication` changes.
