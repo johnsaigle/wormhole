@@ -32,6 +32,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"time"
@@ -482,6 +483,72 @@ func (n *Notary) loadFromDB(logger *zap.Logger) error {
 	)
 
 	return nil
+}
+
+// Status returns a formatted string with the current status of the notary.
+// This method mirrors the Governor's Status() method for consistency.
+func (n *Notary) Status() string {
+	n.mutex.RLock()
+	defer n.mutex.RUnlock()
+
+	resp := "Notary Status:\n"
+	resp += fmt.Sprintf("  Total delayed messages: %d\n", n.delayed.Len())
+	resp += fmt.Sprintf("  Total blackholed messages: %d\n", n.blackholed.Len())
+
+	if n.delayed.Len() > 0 {
+		resp += "\n  Delayed messages (showing first 20):\n"
+
+		count := 0
+		maxToShow := 20
+
+		snapshot := n.snapshotDelayedMessages(maxToShow)
+		for _, pMsg := range snapshot {
+			resp += fmt.Sprintf("    [%d] Chain: %v, EmitterAddr: %v, Seq: %d, ReleaseTime: %v\n",
+				count,
+				pMsg.Msg.EmitterChain,
+				pMsg.Msg.EmitterAddress,
+				pMsg.Msg.Sequence,
+				pMsg.ReleaseTime.Format(time.RFC3339),
+			)
+			count++
+		}
+	}
+
+	return resp
+}
+
+// snapshotDelayedMessages creates a snapshot of the first N delayed messages.
+// Must be called with the mutex held (either read or write lock).
+func (n *Notary) snapshotDelayedMessages(maxCount int) []*common.PendingMessage {
+	if n.delayed == nil || n.delayed.Len() == 0 {
+		return nil
+	}
+
+	count := n.delayed.Len()
+	if count > maxCount {
+		count = maxCount
+	}
+
+	snapshot := make([]*common.PendingMessage, 0, count)
+
+	tempQueue := common.NewPendingMessageQueue()
+
+	for i := 0; i < count && n.delayed.Len() > 0; i++ {
+		pMsg := n.delayed.Pop()
+		if pMsg != nil {
+			snapshot = append(snapshot, pMsg)
+			tempQueue.Push(pMsg)
+		}
+	}
+
+	for tempQueue.Len() > 0 {
+		pMsg := tempQueue.Pop()
+		if pMsg != nil {
+			n.delayed.Push(pMsg)
+		}
+	}
+
+	return snapshot
 }
 
 // NewSet creates and initializes a new Set

@@ -490,3 +490,29 @@ func encodePayloadBytes(payload *vaa.TransferPayloadHdr) []byte {
 	binary.BigEndian.PutUint16(bz[99:101], uint16(payload.TargetChain))
 	return bz
 }
+
+func TestNotary_Status(t *testing.T) {
+	notary := makeTestNotary(t)
+	notary.delayed = common.NewPendingMessageQueue()
+	notary.blackholed = NewSet()
+
+	statusEmpty := notary.Status()
+	require.Contains(t, statusEmpty, "Total delayed messages: 0")
+	require.Contains(t, statusEmpty, "Total blackholed messages: 0")
+
+	msg1 := makeUniqueMessagePublication(t)
+	pMsg1 := &common.PendingMessage{
+		Msg:         *msg1,
+		ReleaseTime: time.Now().Add(time.Hour),
+	}
+	notary.delayed.Push(pMsg1)
+
+	msg2 := makeUniqueMessagePublication(t)
+	notary.blackholed.Add(msg2.VAAHash())
+
+	statusWithData := notary.Status()
+	require.Contains(t, statusWithData, "Total delayed messages: 1")
+	require.Contains(t, statusWithData, "Total blackholed messages: 1")
+	require.Contains(t, statusWithData, "Delayed messages (showing first 20)")
+	require.Contains(t, statusWithData, fmt.Sprintf("Seq: %d", msg1.Sequence))
+}
