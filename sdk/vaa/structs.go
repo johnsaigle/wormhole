@@ -255,8 +255,7 @@ const (
 	ChainIDPythNet ChainID = 26
 	// NOTE: 27 belongs to a chain that was never deployed.
 	// OBSOLETE: ChainIDXpla ChainID = 28
-	// ChainIDBtc is the ChainID of Bitcoin
-	ChainIDBtc ChainID = 29
+	// OBSOLETE: ChainIDBtc ChainID = 29
 	// ChainIDBase is the ChainID of Base
 	ChainIDBase ChainID = 30
 	// ChainIDFileCoin is the ChainID of FileCoin

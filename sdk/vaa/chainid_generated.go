@@ -54,8 +54,6 @@ func (c ChainID) String() string {
 		return "gnosis"
 	case ChainIDPythNet:
 		return "pythnet"
-	case ChainIDBtc:
-		return "btc"
 	case ChainIDBase:
 		return "base"
 	case ChainIDFileCoin:
@@ -206,8 +204,6 @@ func ChainIDFromString(s string) (ChainID, error) {
 		return ChainIDGnosis, nil
 	case "pythnet":
 		return ChainIDPythNet, nil
-	case "btc":
-		return ChainIDBtc, nil
 	case "base":
 		return ChainIDBase, nil
 	case "filecoin":
@@ -335,7 +331,6 @@ func GetAllNetworkIDs() []ChainID {
 		ChainIDOptimism,
 		ChainIDGnosis,
 		ChainIDPythNet,
-		ChainIDBtc,
 		ChainIDBase,
 		ChainIDFileCoin,
 		ChainIDSei,
