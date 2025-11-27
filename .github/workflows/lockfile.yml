@@ -7,4 +7,4 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: johnsaigle/lockfile-guard@4510bd0e54f2d8ed1380c775965ac41a3dda0810
+      - uses: johnsaigle/lockfile-guard@main
