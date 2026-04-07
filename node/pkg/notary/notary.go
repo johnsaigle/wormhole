@@ -1,7 +1,11 @@
 // Notary evaluates the status of [common.MessagePublication]s and makes decisions regarding
 // how they should be processed.
 //
-// Currently, it returns one of three possible verdicts:
+// Right now, the Notary serves two purposes:
+// 1. Enforce Transfer Verifier outcomes for token bridge transfers on supported chains.
+// 2. Quarantine token bridge transfers from configured sender chains, regardless of verification state.
+//
+// It returns one of three possible verdicts:
 // 1. Approve
 //   - Messages should pass through normally.
 //   - This verdict is used for any message that has a non-error status.
@@ -81,7 +85,7 @@ const (
 	// The value should be long enough to allow for manual review and classification
 	// by the Guardians.
 	DefaultDelay = time.Hour * 24 * 4
-	MaxDelayDays = 30
+	MaxDelayDays = 90
 	MaxDelay     = time.Hour * 24 * MaxDelayDays
 
 	// The ticker interval for the notary's periodic metrics update.
@@ -120,6 +124,9 @@ type (
 
 		// env reports whether the guardian is running in production or a test environment.
 		env common.Environment
+
+		// quarantinedChains identifies sender chains whose token bridge transfers should be delayed.
+		quarantinedChains map[vaa.ChainID]struct{}
 	}
 )
 
@@ -128,16 +135,18 @@ func NewNotary(
 	logger *zap.Logger,
 	guardianDB *db.Database,
 	env common.Environment,
+	quarantineChainIDs []vaa.ChainID,
 ) *Notary {
 	return &Notary{
 		ctx:    ctx,
 		logger: logger,
 		mutex:  sync.RWMutex{},
 		// Get the underlying database connection from the Guardian.
-		database:   db.NewNotaryDB(guardianDB.Conn()),
-		delayed:    common.NewPendingMessageQueue(),
-		blackholed: nil,
-		env:        env,
+		database:          db.NewNotaryDB(guardianDB.Conn()),
+		delayed:           common.NewPendingMessageQueue(),
+		blackholed:        nil,
+		env:               env,
+		quarantinedChains: makeChainSet(quarantineChainIDs),
 	}
 }
 
@@ -206,16 +215,16 @@ func (n *Notary) ProcessMsg(msg *common.MessagePublication) (v Verdict, err erro
 
 	n.logger.Debug("notary: processing message", msg.ZapFields()...)
 
-	// For the initial implementation, the Notary only rules on messages based
-	// on the Transfer Verifier. However, there is no technical barrier to
-	// supporting other message types.
-	if !txverifier.IsSupported(msg.EmitterChain) {
-		n.logger.Debug("notary: automatically approving message: sent from a chain without a transfer verifier implementation", msg.ZapFields()...)
+	if !vaa.IsTransfer(msg.Payload) {
+		n.logger.Debug("notary: automatically approving message: it is not a wrapped token transfer", msg.ZapFields()...)
 		return Approve, nil
 	}
 
-	if !vaa.IsTransfer(msg.Payload) {
-		n.logger.Debug("notary: automatically approving message: it is not a wrapped token transfer", msg.ZapFields()...)
+	// The Notary currently operates in two modes: Transfer Verifier enforcement and quarantine.
+	// When quarantine mode is configured, we intentionally skip the transfer verifier support gate
+	// so quarantined chains are still delayed even if they do not currently have a verifier.
+	if !n.isQuarantineMode() && !txverifier.IsSupported(msg.EmitterChain) {
+		n.logger.Debug("notary: automatically approving message: sent from a chain without a transfer verifier implementation", msg.ZapFields()...)
 		return Approve, nil
 	}
 
@@ -261,6 +270,21 @@ func (n *Notary) ProcessMsg(msg *common.MessagePublication) (v Verdict, err erro
 		return Blackhole, nil
 	}
 
+	if n.isQuarantinedChain(msg.EmitterChain) {
+		if n.IsDelayed(msg) {
+			n.logger.Info("notary: quarantined token bridge transfer already delayed", msg.ZapFields()...)
+			return Delay, nil
+		}
+
+		// Quarantine mode delays matching token bridge transfers even if they would otherwise be approved.
+		err = n.delay(msg, MaxDelay)
+		v = Delay
+		if err == nil {
+			n.logger.Warn("notary: delayed token bridge transfer from quarantined chain", msg.ZapFields()...)
+		}
+		return
+	}
+
 	switch msg.VerificationState() {
 	// Both Anomalous and Rejected messages are delayed. In the future, we could consider blackholing
 	// rejected messages, but for now, we are choosing the cautious approach of delaying VAA production
@@ -291,6 +315,15 @@ func (n *Notary) ProcessMsg(msg *common.MessagePublication) (v Verdict, err erro
 	}
 
 	return
+}
+
+func (n *Notary) isQuarantinedChain(chainID vaa.ChainID) bool {
+	_, ok := n.quarantinedChains[chainID]
+	return ok
+}
+
+func (n *Notary) isQuarantineMode() bool {
+	return len(n.quarantinedChains) != 0
 }
 
 // ReleaseReadyMessages removes messages from the database and the delayed queue if they are ready to
@@ -660,6 +693,14 @@ func NewSet() *msgPubSet {
 	return &msgPubSet{
 		elements: make(map[string]struct{}),
 	}
+}
+
+func makeChainSet(chainIDs []vaa.ChainID) map[vaa.ChainID]struct{} {
+	chains := make(map[vaa.ChainID]struct{}, len(chainIDs))
+	for _, chainID := range chainIDs {
+		chains[chainID] = struct{}{}
+	}
+	return chains
 }
 
 // Len returns the number of elements in the set. Returns 0 if the set is nil.

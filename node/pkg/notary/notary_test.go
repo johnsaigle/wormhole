@@ -38,14 +38,23 @@ func makeTestNotary(t *testing.T) *Notary {
 	t.Helper()
 
 	return &Notary{
-		ctx:        context.Background(),
-		logger:     zap.NewNop(),
-		mutex:      sync.RWMutex{},
-		database:   MockNotaryDB{},
-		delayed:    &common.PendingMessageQueue{},
-		blackholed: NewSet(),
-		env:        common.GoTest,
+		ctx:               context.Background(),
+		logger:            zap.NewNop(),
+		mutex:             sync.RWMutex{},
+		database:          MockNotaryDB{},
+		delayed:           &common.PendingMessageQueue{},
+		blackholed:        NewSet(),
+		env:               common.GoTest,
+		quarantinedChains: make(map[vaa.ChainID]struct{}),
 	}
+}
+
+func makeTestQuarantinedNotary(t *testing.T, chainIDs ...vaa.ChainID) *Notary {
+	t.Helper()
+
+	n := makeTestNotary(t)
+	n.quarantinedChains = makeChainSet(chainIDs)
+	return n
 }
 
 // TestNotary_AlwaysApproveNonTransferVerifierEmitters tests that all messages are approve if the emitter chain does not have a transfer verifier.
@@ -286,6 +295,78 @@ func TestNotary_ProcessMessageAlwaysApprovesNonTokenTransfers(t *testing.T) {
 			require.Equal(t, Approve, verdict)
 		})
 	}
+}
+
+func TestNotary_QuarantineDelaysTokenBridgeTransfers(t *testing.T) {
+	n := makeTestQuarantinedNotary(t, vaa.ChainIDEthereum)
+	msg := makeUniqueMessagePublication(t)
+
+	verdict, err := n.ProcessMsg(msg)
+	require.NoError(t, err)
+	require.Equal(t, Delay, verdict)
+	require.Equal(t, 1, n.delayed.Len())
+
+	pending := n.delayed.Peek()
+	require.NotNil(t, pending)
+	require.Equal(t, msg.MessageIDString(), pending.Msg.MessageIDString())
+	require.WithinDuration(t, time.Now().Add(MaxDelay), pending.ReleaseTime, time.Second)
+}
+
+func TestNotary_QuarantineDelaysApprovedTokenBridgeTransfers(t *testing.T) {
+	n := makeTestQuarantinedNotary(t, vaa.ChainIDEthereum)
+	msg := makeUniqueMessagePublication(t)
+	require.NoError(t, msg.SetVerificationState(common.Valid))
+
+	verdict, err := n.ProcessMsg(msg)
+	require.NoError(t, err)
+	require.Equal(t, Delay, verdict)
+	require.Equal(t, 1, n.delayed.Len())
+}
+
+func TestNotary_QuarantineSkipsTransferVerifierSupportGate(t *testing.T) {
+	n := makeTestQuarantinedNotary(t, vaa.ChainIDSolana)
+	msg := makeUniqueMessagePublication(t)
+	msg.EmitterChain = vaa.ChainIDSolana
+
+	verdict, err := n.ProcessMsg(msg)
+	require.NoError(t, err)
+	require.Equal(t, Delay, verdict)
+	require.Equal(t, 1, n.delayed.Len())
+}
+
+func TestNotary_QuarantineDoesNotDelayNonTokenTransfers(t *testing.T) {
+	n := makeTestQuarantinedNotary(t, vaa.ChainIDEthereum)
+	msg := makeUniqueMessagePublication(t)
+	msg.Payload = []byte{0x02}
+	require.False(t, vaa.IsTransfer(msg.Payload))
+
+	verdict, err := n.ProcessMsg(msg)
+	require.NoError(t, err)
+	require.Equal(t, Approve, verdict)
+	require.Equal(t, 0, n.delayed.Len())
+}
+
+func TestNotary_QuarantineReobservationDoesNotRefreshTimer(t *testing.T) {
+	n := makeTestQuarantinedNotary(t, vaa.ChainIDEthereum)
+	msg := makeUniqueMessagePublication(t)
+
+	verdict, err := n.ProcessMsg(msg)
+	require.NoError(t, err)
+	require.Equal(t, Delay, verdict)
+	require.Equal(t, 1, n.delayed.Len())
+
+	firstPending := n.delayed.Peek()
+	require.NotNil(t, firstPending)
+	firstRelease := firstPending.ReleaseTime
+
+	verdict, err = n.ProcessMsg(msg)
+	require.NoError(t, err)
+	require.Equal(t, Delay, verdict)
+	require.Equal(t, 1, n.delayed.Len())
+
+	secondPending := n.delayed.Peek()
+	require.NotNil(t, secondPending)
+	require.Equal(t, firstRelease, secondPending.ReleaseTime)
 }
 
 func TestNotary_ProcessReadyMessages(t *testing.T) {

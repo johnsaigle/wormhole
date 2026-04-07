@@ -270,13 +270,13 @@ func GuardianOptionGovernor(governorEnabled bool, flowCancelEnabled bool, coinGe
 
 // GuardianOptionNotary enables or disables the Notary.
 // Dependencies: db
-func GuardianOptionNotary(notaryEnabled bool) *GuardianOption {
+func GuardianOptionNotary(notaryEnabled bool, quarantineChainIDs []vaa.ChainID) *GuardianOption {
 	return &GuardianOption{
 		name:         "notary",
 		dependencies: []string{"db"},
 		f: func(ctx context.Context, logger *zap.Logger, g *G) error {
 			if notaryEnabled {
-				g.notary = notary.NewNotary(ctx, logger, g.db, g.env)
+				g.notary = notary.NewNotary(ctx, logger, g.db, g.env, quarantineChainIDs)
 			} else {
 				logger.Info("notary is disabled")
 			}

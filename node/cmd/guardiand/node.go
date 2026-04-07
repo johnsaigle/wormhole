@@ -308,7 +308,9 @@ var (
 	transferVerifierEnabledChainIDs *[]uint
 	// Global variable used to store enabled Chain IDs for Transfer Verification. Contents are parsed from
 	// transferVerifierEnabledChainIDs.
-	txVerifierChains []vaa.ChainID
+	txVerifierChains      []vaa.ChainID
+	quarantineChainIDs    []vaa.ChainID
+	quarantineChainIDsRaw *[]uint
 
 	// featureFlags are additional static flags that should be published in P2P heartbeats.
 	featureFlags  []string
@@ -563,6 +565,7 @@ func init() {
 	subscribeToVAAs = NodeCmd.Flags().Bool("subscribeToVAAs", false, "Guardiand should subscribe to incoming signed VAAs, set to true if running a public RPC node")
 
 	transferVerifierEnabledChainIDs = NodeCmd.Flags().UintSlice("transferVerifierEnabledChainIDs", make([]uint, 0), "Transfer Verifier will be enabled for these chain IDs (comma-separated)")
+	quarantineChainIDsRaw = NodeCmd.Flags().UintSlice("quarantineChainIDs", make([]uint, 0), "Delay token bridge transfers from these sender chain IDs in the notary (comma-separated)")
 
 	notaryEnabled = NodeCmd.Flags().Bool("notaryEnabled", false, "Run the notary")
 
@@ -612,6 +615,14 @@ func initConfig(cmd *cobra.Command, args []string) error {
 	})
 }
 
+func parseChainIDs(chainIDs []uint) []vaa.ChainID {
+	parsed := make([]vaa.ChainID, 0, len(chainIDs))
+	for _, chainID := range chainIDs {
+		parsed = append(parsed, vaa.ChainID(chainID))
+	}
+	return parsed
+}
+
 func runNode(cmd *cobra.Command, args []string) {
 	if *unsafeDevMode && *testnetMode {
 		fmt.Println("Cannot be in unsafeDevMode and testnetMode at the same time.")
@@ -628,6 +639,11 @@ func runNode(cmd *cobra.Command, args []string) {
 
 	if Build == "dev" && env != common.UnsafeDevNet {
 		fmt.Println("This is a development build. --unsafeDevMode must be enabled.")
+		os.Exit(1)
+	}
+
+	if len(*quarantineChainIDsRaw) > 0 && !*notaryEnabled {
+		fmt.Println("--quarantineChainIDs requires --notaryEnabled")
 		os.Exit(1)
 	}
 
@@ -1011,6 +1027,8 @@ func runNode(cmd *cobra.Command, args []string) {
 		}
 		featureFlags = append(featureFlags, fmt.Sprintf("txverifier:%s", strings.Join(chainNames, "|")))
 	}
+
+	quarantineChainIDs = parseChainIDs(*quarantineChainIDsRaw)
 
 	var publicRpcLogDetail common.GrpcLogDetail
 	switch *publicRpcLogDetailStr {
@@ -2029,7 +2047,7 @@ func runNode(cmd *cobra.Command, args []string) {
 		node.GuardianOptionWatchers(watcherConfigs, ibcWatcherConfig),
 		node.GuardianOptionAccountant(*accountantWS, *accountantContract, *accountantCheckEnabled, accountantWormchainConn, *accountantNttContract, accountantNttWormchainConn),
 		node.GuardianOptionGovernor(*chainGovernorEnabled, *governorFlowCancelEnabled, *coinGeckoApiKey),
-		node.GuardianOptionNotary(*notaryEnabled),
+		node.GuardianOptionNotary(*notaryEnabled, quarantineChainIDs),
 		node.GuardianOptionManagerService(*managerServiceEnabled, managerSigners, *ethRPC),
 		node.GuardianOptionGatewayRelayer(*gatewayRelayerContract, gatewayRelayerWormchainConn),
 		node.GuardianOptionQueryHandler(*ccqEnabled, *ccqAllowedRequesters),

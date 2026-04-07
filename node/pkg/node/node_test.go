@@ -189,7 +189,7 @@ func mockGuardianRunnable(t testing.TB, gs []*mockGuardian, mockGuardianIndex ui
 			GuardianOptionWatchers(watcherConfigs, nil),
 			GuardianOptionNoAccountant(), // disable accountant
 			GuardianOptionGovernor(true, false, ""),
-			GuardianOptionNotary(true),
+			GuardianOptionNotary(true, nil),
 			GuardianOptionGatewayRelayer("", nil),        // disable gateway relayer
 			GuardianOptionQueryHandler(false, ""),        // disable queries
 			GuardianOptionManagerService(false, nil, ""), // disable manager service
