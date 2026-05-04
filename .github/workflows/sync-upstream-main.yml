@@ -1,0 +1,20 @@
+name: Sync Upstream Main
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync-upstream-main:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - name: Sync main from upstream
+        run: |
+          git remote add upstream https://github.com/wormhole-foundation/wormhole.git
+          git fetch upstream main
+          git checkout -B main upstream/main
+          git push origin main --force

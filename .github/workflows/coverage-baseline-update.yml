@@ -1,0 +1,97 @@
+name: Coverage Baseline Update
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 5' # Run every Friday at 06:00 UTC
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  coverage-update:
+    runs-on: ubuntu-24.04
+    env:
+      COVERAGE_UPDATE_BRANCH: node/coverage-baseline-update-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # workflow_dispatch can run from this workflow branch, but coverage must be measured against upstream main.
+          # Fetch all refs first so the next step can explicitly switch to upstream/main.
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check out main
+        run: |
+          # Coverage must be measured against upstream main, not fork main — the fork's main is only as
+          # fresh as the last manual sync, and generated PRs cut from a stale base conflict with upstream.
+          git remote add upstream https://github.com/wormhole-foundation/wormhole.git
+          git fetch upstream +refs/heads/main:refs/remotes/upstream/main
+          git checkout -B main upstream/main
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: node/go.mod
+      - name: Run tests with coverage
+        run: make test-coverage
+      - name: Build coverage check tool
+        run: make build-coverage-check
+      - name: Check for coverage improvements
+        id: check
+        run: |
+          # In GitHub Actions, coverage-check treats improvements as success and regressions as failures.
+          # We key off the improvement message so unchanged coverage and regressions do not update the baseline.
+          if ./coverage-check -v 2>&1 | tee check-output.txt | grep -q "Coverage improved!"; then
+            echo "improved=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "improved=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Update coverage baseline
+        if: steps.check.outputs.improved == 'true'
+        run: ./coverage-check -u
+      - name: Check if baseline changed
+        id: changed
+        if: steps.check.outputs.improved == 'true'
+        run: |
+          # Guard against empty generated branches on re-runs where the baseline is already current.
+          if git diff --quiet -- .coverage-baseline; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Commit changes
+        if: steps.check.outputs.improved == 'true' && steps.changed.outputs.changed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          # Use the standard GitHub Actions bot identity so generated commits are not attributed to a human account.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Use a unique generated branch per run. Reusing one branch causes stale/non-fast-forward pushes
+          # after upstream hard-reset syncs, and also prevents each weekly update from getting its own PR.
+          git checkout -B "${COVERAGE_UPDATE_BRANCH}"
+          git add .coverage-baseline
+          git commit -m "node: update coverage baseline"
+
+          # Checkout credentials are intentionally not persisted. Authenticate only this push to the fork.
+          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "${COVERAGE_UPDATE_BRANCH}"
+      - name: Create Pull Request
+        if: steps.check.outputs.improved == 'true' && steps.changed.outputs.changed == 'true'
+        env:
+          # The default github.token is scoped to this fork, so use a PAT that can open PRs on upstream.
+          GH_TOKEN: ${{ secrets.COVERAGE_BASELINE_UPDATE_SECRET }}
+        run: |
+          # Create the PR against upstream, with this fork's unique generated branch as the PR head.
+          if ! gh pr list \
+            --repo wormhole-foundation/wormhole \
+            --head "${{ github.repository_owner }}:${COVERAGE_UPDATE_BRANCH}" \
+            --json number \
+            --jq '.[0].number' | grep -q .; then
+            gh pr create \
+              --repo wormhole-foundation/wormhole \
+              --base main \
+              --head "${{ github.repository_owner }}:${COVERAGE_UPDATE_BRANCH}" \
+              --title "node: Update coverage baseline" \
+              --body "Coverage has improved since the previous baseline. This PR updates the coverage baseline to reflect the latest test coverage.
+
+          Review the diff in \`.coverage-baseline\` and merge to lock in the improvements."
+          fi
