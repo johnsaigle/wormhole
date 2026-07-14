@@ -136,6 +136,44 @@ deployment steps to hijack the process. This atomic execution model prevents fro
 attacks that might be possible in environments where deployment occurs across multiple
 transactions or time-separated steps.
 
+### Solana Core Bridge rent reclamation deletes a Wormhole message or VAA
+
+**Justification:**
+
+Solana Core Bridge `PostedMessage`, `SignatureSet`, and `PostedVAA` accounts are
+temporary on-chain artifacts, not the protocol's durable source of message or VAA
+availability. They may be closed permissionlessly after the configured retention
+period. Reports should not assume that a downstream application must consume every
+`PostedVAA`, or create its application-specific claim account, before Core can reclaim
+these generic accounts.
+
+The two close paths have different recovery roles:
+
+- `ClosePostedMessage` emits the full `msg` or `msu` account contents before closure.
+  During reobservation, the Solana watcher reconstructs the original source message
+  from that close event so Guardians can process it again.
+- `CloseSignatureSetAndPostedVAA` closes destination-side verification artifacts for
+  a VAA that was already generated. An initialized `PostedVAA`, including its binding
+  to the supplied signature set, demonstrates that the signature set successfully
+  produced that VAA at some point; the account is not intended to be permanent VAA
+  storage.
+
+Signed VAAs are distributed and persisted independently of these Solana accounts. If
+an archived VAA can no longer be posted because its original Guardian set has expired,
+the original source-chain message can be reobserved and signed by the current Guardian
+set. The VAA body, body hash, emitter, and sequence remain unchanged; only the
+Guardian-set-dependent header and signatures change. It can therefore recreate the
+same body-hash-derived `PostedVAA` and maps to the same application replay-protection
+identity. The recreated account receives a new submission time and retention window.
+
+The absence of a Token Bridge claim check in Core's close instruction is consequently
+not, by itself, a fund-lock vulnerability. A report must instead demonstrate that the
+source message cannot be reobserved into a valid current-set VAA, that closure bypasses
+the retention period, or that an attacker can prevent consumption again after the
+fresh retention window begins. See [Signed message data availability](./whitepapers/0005_data_availability.md)
+and [Guardian reobservation requests](./docs/guardian.md#reobservation-requests) for the
+protocol-level availability and recovery model.
+
 ### Abuse of wormchain-related Cosmos SDK governance
 
 **Justification:**
