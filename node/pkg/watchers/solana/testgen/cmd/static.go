@@ -69,6 +69,17 @@ func scenarios() []scenario {
 			return testgen.NewBuilder(baseCfg("pm_reliable_inner")).
 				AddPostMessage(testgen.PostMessageSpec{Location: testgen.Inner, Kind: testgen.PostMessage, Msg: fields(3, 3, "cpi-message")}).Build()
 		}},
+		{"pm_incomplete_logs", func() (*testgen.Bundle, error) {
+			bundle, err := testgen.NewBuilder(baseCfg("pm_incomplete_logs")).
+				AddPostMessage(testgen.PostMessageSpec{Location: testgen.Outer, Kind: testgen.PostMessage, Msg: fields(12, 12, "incomplete-logs")}).Build()
+			if err != nil {
+				return nil, err
+			}
+			bundle.Meta.LogMessages = []string{
+				fmt.Sprintf("Program %s invoke [1]", core),
+			}
+			return bundle, nil
+		}},
 
 		// --- Shim, direct vs integrator ---
 		{"shim_direct", func() (*testgen.Bundle, error) {
@@ -103,10 +114,6 @@ func scenarios() []scenario {
 			badOwner := key(0x99)
 			return testgen.NewBuilder(baseCfg("pm_reliable_wrong_owner")).
 				AddPostMessage(testgen.PostMessageSpec{Location: testgen.Outer, Kind: testgen.PostMessage, Msg: fields(9, 9, "hi"), Account: testgen.AccountContent{Owner: &badOwner}}).Build()
-		}},
-		{"pm_reliable_not_finalized", func() (*testgen.Bundle, error) {
-			return testgen.NewBuilder(baseCfg("pm_reliable_not_finalized")).
-				AddPostMessage(testgen.PostMessageSpec{Location: testgen.Outer, Kind: testgen.PostMessage, Msg: fields(10, 10, "hi"), Account: testgen.AccountContent{MessageStatus: 1}}).Build()
 		}},
 		{"pm_reliable_bad_prefix", func() (*testgen.Bundle, error) {
 			return testgen.NewBuilder(baseCfg("pm_reliable_bad_prefix")).

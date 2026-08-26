@@ -109,14 +109,13 @@ type WormholeFields struct {
 
 // AccountContent describes the generated message account data.
 type AccountContent struct {
-	Prefix           string            // overrides "msg"/"msu"; empty => derived from Kind
-	Owner            *solana.PublicKey // overrides owner; nil => core contract
-	VaaVersion       uint8
-	RawConsistency   *uint8 // overrides the account consistency byte; nil => derived from Commitment
-	EmitterAuthority [32]byte
-	MessageStatus    uint8
-	Gap              [3]byte
-	SubmissionTime   *uint32 // overrides; nil => WormholeFields.Timestamp
+	Prefix              string            // overrides "msg"/"msu"; empty => derived from Kind
+	Owner               *solana.PublicKey // overrides owner; nil => core contract
+	VaaVersion          uint8
+	RawConsistency      *uint8 // overrides the account consistency byte; nil => derived from Commitment
+	VaaTime             uint32
+	VaaSignatureAccount solana.PublicKey
+	SubmissionTime      *uint32 // overrides; nil => WormholeFields.Timestamp
 }
 
 // PostMessageSpec describes an account-based post_message. The message account is
@@ -380,17 +379,16 @@ func (b *Builder) accountBlob(kind MessageKind, m WormholeFields, ac AccountCont
 		st = *ac.SubmissionTime
 	}
 	body, err := borsh.Serialize(solwatch.MessagePublicationAccount{
-		VaaVersion:       ac.VaaVersion,
-		ConsistencyLevel: cons,
-		EmitterAuthority: toAddr(ac.EmitterAuthority),
-		MessageStatus:    ac.MessageStatus,
-		Gap:              ac.Gap,
-		SubmissionTime:   st,
-		Nonce:            m.Nonce,
-		Sequence:         m.Sequence,
-		EmitterChain:     m.EmitterChain,
-		EmitterAddress:   toAddr(m.EmitterAddress),
-		Payload:          m.Payload,
+		VaaVersion:          ac.VaaVersion,
+		ConsistencyLevel:    cons,
+		VaaTime:             ac.VaaTime,
+		VaaSignatureAccount: ac.VaaSignatureAccount,
+		SubmissionTime:      st,
+		Nonce:               m.Nonce,
+		Sequence:            m.Sequence,
+		EmitterChain:        m.EmitterChain,
+		EmitterAddress:      toAddr(m.EmitterAddress),
+		Payload:             m.Payload,
 	})
 	b.fail(err)
 	return append([]byte(prefix), body...)
