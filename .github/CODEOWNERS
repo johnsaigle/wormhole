@@ -196,3 +196,6 @@ cspell* @evan-gray @kcsongor @panoel @djb15 @SEJeff @johnsaigle @mdulin2 @please
 
 ## OSS Scanner
 .oss-scanner/ @djb15 @bemic @pleasew8t @johnsaigle @mdulin2
+
+## GitHub
+.github/workflows/codeql.yml @evan-gray @djb15 @bemic @pleasew8t @johnsaigle @mdulin2
